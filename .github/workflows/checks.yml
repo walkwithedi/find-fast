@@ -26,6 +26,19 @@ jobs:
         run: python scripts/check_repo.py
       - name: shellcheck
         run: shellcheck -S warning .githooks/* .claude/hooks/session-start.sh $(ls install.sh 2>/dev/null)
+  gtk:
+    # The GTK window with the distribution's own python3-gi, under a virtual display.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: GTK 3 and a virtual display
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends python3-gi gir1.2-gtk-3.0 xvfb
+      - name: GTK window tests
+        run: xvfb-run -a /usr/bin/python3 -m unittest tests.test_gtk -v
   bench:
     # Speed and memory on a synthetic index of a million entries (scripts/bench.py). Reported
     # in the job summary; the limits are checked by hand when a pull request changes the core.

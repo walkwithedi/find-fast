@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=秒搜文件
+Name[en]=find-fast
+Comment=按文件名秒搜家目录与本地磁盘里的文件
+Comment[en]=Instant file-name search for your home folder and local disks
+Exec=sh -c "p=\\$(dirname \\"\\$(readlink -f \\"\\$1\\")\\")/find_fast.py; [ -f \\"\\$p\\" ] && exec python3 \\"\\$p\\"; m=\\"找不到 \\$p。请把工具目录里的「双击运行」以链接方式放到别处，不要复制。\\"; zenity --error --text=\\"\\$m\\" 2>/dev/null || notify-send \\"\\$m\\" 2>/dev/null || { mkdir -p \\"\\$HOME/.cache/find-fast\\" && echo \\"\\$m\\" >> \\"\\$HOME/.cache/find-fast/launcher.log\\"; }" sh %k
+Terminal=false
+Icon=system-search
+Categories=Utility;FileTools;
+StartupNotify=true

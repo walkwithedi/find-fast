@@ -9,7 +9,7 @@ find-fast（秒搜文件）是 Linux 桌面上的全盘文件名搜索工具：P
 - `find_fast_gtk.py`：GTK3 窗口。
 - `find_fast_web.py`、`find_fast.html`：网页退回（本机服务与页面）。
 - `双击运行.desktop`、`install.sh`：双击入口与可选安装脚本。
-- `tests/`：unittest；`tests/ui_gtk_test.py` 在 xvfb 下测 GTK 窗口，`tests/web.test.js` 用 Playwright 测网页。
+- `tests/`：unittest；`tests/test_gtk.py` 在 xvfb 下测 GTK 窗口（没有 gi 或显示时跳过），`tests/web.test.js` 用 Playwright 测网页。
 - `scripts/`：仓库检查（`run_checks.py`、`check_repo.py`）、敏感扫描（`sensitive_scan.py`）、基准测试（`bench.py`）。
 
 ## 运行环境约束
