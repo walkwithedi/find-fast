@@ -360,8 +360,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {'started': st.rescan()})
         elif url.path == '/api/quit':
             log.info('quit requested by page')
+            st.quit.set()       # before the reply, so a caller that sees the reply sees the flag
             self.send_json(200, {'ok': True})
-            st.quit.set()
         else:
             self.send_json(404, {'error': msg('not_found')})
 
