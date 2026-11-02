@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>秒搜文件</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --text:#1f2328; --muted:#656d76; --line:#d0d7de; --accent:#0969da; --sel:#ddf4ff;
+          --ok:#1a7f37; --warn:#9a6700; --bad:#cf222e; --info:#0969da; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0d1117; --card:#161b22; --text:#e6edf3; --muted:#8d96a0; --line:#30363d; --accent:#4493f8; --sel:#1f3a5f;
+            --ok:#3fb950; --warn:#d29922; --bad:#f85149; --info:#4493f8; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:15px/1.5 "Noto Sans CJK SC","WenQuanYi Micro Hei","PingFang SC","Microsoft YaHei",sans-serif; }
+  main { max-width:1200px; margin:0 auto; padding:16px 16px 32px; }
+  header { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+  h1 { font-size:22px; margin:0; }
+  .bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:12px 0 8px; }
+  #q { flex:1 1 240px; min-width:0; padding:8px 10px; font-size:16px; border:1px solid var(--line); border-radius:6px;
+       background:var(--card); color:var(--text); }
+  select, button { padding:7px 12px; font-size:14px; border:1px solid var(--line); border-radius:6px; background:var(--card);
+                   color:var(--text); cursor:pointer; font-family:inherit; }
+  button:disabled, select:disabled, input:disabled { opacity:.5; cursor:default; }
+  :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin:0 0 8px; }
+  #status { min-height:1.5em; margin:4px 0 8px; color:var(--muted); }
+  #status.ok { color:var(--ok); } #status.warn { color:var(--warn); } #status.bad { color:var(--bad); } #status.info { color:var(--info); }
+  .wrap { overflow-x:auto; background:var(--card); border:1px solid var(--line); border-radius:8px; }
+  table { width:100%; border-collapse:collapse; min-width:560px; }
+  th { text-align:left; font-weight:normal; color:var(--muted); padding:0; border-bottom:1px solid var(--line); white-space:nowrap; }
+  th button { border:0; border-radius:0; background:transparent; width:100%; text-align:left; padding:6px 10px; color:inherit; }
+  th button[aria-sort]::after { content:""; }
+  th[aria-sort="ascending"] button::after { content:" ▲"; }
+  th[aria-sort="descending"] button::after { content:" ▼"; }
+  td { padding:4px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td.name { word-break:break-all; }
+  td.dir { color:var(--muted); word-break:break-all; font-size:13.5px; }
+  td.size, td.time { white-space:nowrap; font-variant-numeric:tabular-nums; }
+  td.size { text-align:right; }
+  tr[aria-selected="true"] td { background:var(--sel); }
+  tbody tr { cursor:default; }
+  .kind { display:inline-block; width:1.4em; color:var(--muted); }
+  #more { display:none; margin:8px auto; }
+  footer { color:var(--muted); font-size:13px; margin-top:20px; border-top:1px solid var(--line); padding-top:10px;
+           display:flex; flex-wrap:wrap; gap:8px 16px; justify-content:space-between; }
+  #closed { display:none; background:var(--card); border:1px solid var(--bad); color:var(--bad); border-radius:8px; padding:12px; margin-top:12px; }
+  .help { color:var(--muted); font-size:13px; margin:0 0 8px; }
+  code { font-family:"Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1 id="title">秒搜文件</h1>
+    <button id="quit" type="button">退出</button>
+  </header>
+  <div class="bar">
+    <input id="q" type="search" autocomplete="off" spellcheck="false" autofocus aria-label="搜索">
+    <label for="sort" id="sortLabel">排序</label>
+    <select id="sort">
+      <option value="mtime:1">最新在前</option>
+      <option value="mtime:0">最旧在前</option>
+      <option value="name:0">名称 A→Z</option>
+      <option value="name:1">名称 Z→A</option>
+      <option value="path:0">路径 A→Z</option>
+      <option value="size:1">最大在前</option>
+      <option value="size:0">最小在前</option>
+    </select>
+  </div>
+  <p class="help" id="help"></p>
+  <div class="actions">
+    <button id="open" type="button" disabled>打开</button>
+    <button id="folder" type="button" disabled>打开所在文件夹</button>
+    <button id="copy" type="button" disabled>复制路径</button>
+    <button id="rescan" type="button">重新扫描</button>
+  </div>
+  <div id="status" role="status" aria-live="polite"></div>
+  <div class="wrap">
+    <table>
+      <thead><tr>
+        <th data-sort="name"><button type="button" id="hName">名称</button></th>
+        <th data-sort="path"><button type="button" id="hPath">路径</button></th>
+        <th data-sort="size"><button type="button" id="hSize">大小</button></th>
+        <th data-sort="mtime"><button type="button" id="hTime">修改时间</button></th>
+      </tr></thead>
+      <tbody id="rows" role="listbox" tabindex="-1"></tbody>
+    </table>
+  </div>
+  <button id="more" type="button">显示更多</button>
+  <div id="closed">服务已退出，可关闭本页。</div>
+  <footer><span id="rule">关闭本页后服务数秒内自动退出；点「退出」立即结束。</span><span id="version"></span><span id="index"></span></footer>
+</main>
+<script>
+'use strict';
+const TOKEN = new URLSearchParams(location.search).get('t') || '';
+const PAGE = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const PAGE_ROWS = 200;
+const $ = id => document.getElementById(id);
+const T = {
+  zh: {
+    title: '秒搜文件', quit: '退出', search: '搜索', placeholder: '搜索文件名……', sort: '排序',
+    sorts: ['最新在前', '最旧在前', '名称 A→Z', '名称 Z→A', '路径 A→Z', '最大在前', '最小在前'],
+    help: '多个词同时匹配；a|b 任一；!a 排除；* ? 通配整个文件名；ext:pdf;docx；path: 或带 / 的词匹配完整路径；regex: 正则。',
+    open: '打开', folder: '打开所在文件夹', copy: '复制路径', rescan: '重新扫描', more: '显示更多',
+    cols: ['名称', '路径', '大小', '修改时间'],
+    results: n => n + ' 个结果', results_ms: (n, ms) => n + ' 个结果（' + ms + ' 毫秒）',
+    entries: n => '共 ' + n + ' 个条目', scanning: (d, f) => '正在更新索引：' + d + ' 个文件夹，' + f + ' 个条目……',
+    loading: '正在载入索引……', unreadable: n => n + ' 个文件夹无法读取',
+    watch: {on: '实时更新', limited: '部分文件夹定时更新', off: '定时更新'},
+    copied: p => '已复制路径：' + p, copy_failed: '复制失败：浏览器不允许写剪贴板。请在「路径」列选中后按 Ctrl+C 手动复制。',
+    open_failed: e => '打开失败：' + e + '。请检查文件是否还在，或用文件管理器打开。',
+    search_failed: e => '搜索失败：' + e + '。请修改搜索词后再试。',
+    rescan_started: '已开始重新扫描', rescan_busy: '正在扫描，稍后再试',
+    closed: '服务已退出，可关闭本页。需要再用时重新双击「双击运行」。',
+    rule: '关闭本页后服务数秒内自动退出；点「退出」立即结束。', folderKind: '文件夹',
+  },
+  en: {
+    title: 'find-fast', quit: 'Quit', search: 'Search', placeholder: 'Search file names...', sort: 'Sort',
+    sorts: ['Newest first', 'Oldest first', 'Name A→Z', 'Name Z→A', 'Path A→Z', 'Largest first', 'Smallest first'],
+    help: 'Words must all match; a|b either; !a not; * ? match a whole name; ext:pdf;docx; path: or a word with / matches the whole path; regex: a regular expression.',
+    open: 'Open', folder: 'Open containing folder', copy: 'Copy path', rescan: 'Rescan', more: 'Show more',
+    cols: ['Name', 'Path', 'Size', 'Modified'],
+    results: n => n + ' results', results_ms: (n, ms) => n + ' results (' + ms + ' ms)',
+    entries: n => n + ' entries', scanning: (d, f) => 'Updating the index: ' + d + ' folders, ' + f + ' entries...',
+    loading: 'Loading the index...', unreadable: n => n + ' folders unreadable',
+    watch: {on: 'live updates', limited: 'some folders updated periodically', off: 'periodic updates'},
+    copied: p => 'Path copied: ' + p, copy_failed: 'Copy failed: the browser does not allow writing the clipboard. Select the path and press Ctrl+C.',
+    open_failed: e => 'Open failed: ' + e + '. Check that the file still exists, or open it from a file manager.',
+    search_failed: e => 'Search failed: ' + e + '. Change the search and try again.',
+    rescan_started: 'Rescan started', rescan_busy: 'A scan is running; try again later',
+    closed: 'The service has stopped; you can close this page. Double-click the launcher to start it again.',
+    rule: 'Closing this page stops the service within seconds; Quit stops it at once.', folderKind: 'Folder',
+  },
+};
+let L = T.zh;
+let alive = true;
+let sort = 'mtime', desc = true;
+let sid = null, count = 0, rows = [], cur = -1, seq = 0, loadingMore = false, lastStatus = null;
+
+function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({'X-Token': TOKEN}, opts.headers || {});
+  return fetch(path, opts).then(r => r.json().then(j => {
+    if (!r.ok) { const e = new Error(j.error || ('HTTP ' + r.status)); e.status = r.status; throw e; }
+    return j;
+  }));
+}
+function post(path, body) {
+  return api(path, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body || {})});
+}
+
+let failures = 0;
+function serviceGone() {
+  if (!alive) return;
+  alive = false;
+  $('closed').textContent = L.closed;
+  $('closed').style.display = 'block';
+  ['q', 'sort', 'open', 'folder', 'copy', 'rescan', 'quit', 'more'].forEach(id => { $(id).disabled = true; });
+}
+function ping() {
+  post('/api/ping', {page: PAGE}).then(() => { failures = 0; }).catch(() => { if (++failures >= 3) serviceGone(); });
+}
+ping();
+setInterval(() => { if (alive) ping(); }, 30000);
+document.addEventListener('visibilitychange', () => { if (alive && !document.hidden) ping(); });
+window.addEventListener('pageshow', ev => { if (alive && ev.persisted) ping(); });
+// on close or reload; sendBeacon cannot add headers, so the token goes in the body
+window.addEventListener('pagehide', () => {
+  if (!alive || !navigator.sendBeacon) return;
+  navigator.sendBeacon('/api/bye', new Blob([JSON.stringify({t: TOKEN, page: PAGE})], {type: 'text/plain'}));
+});
+
+function setStatus(text, kind) {
+  const s = $('status');
+  s.className = kind || '';
+  s.textContent = text;
+}
+function showCount(ms) {
+  setStatus(ms === undefined ? L.results(count.toLocaleString()) : L.results_ms(count.toLocaleString(), ms), '');
+}
+
+function applyLanguage(lang) {
+  L = T[lang] || T.en;
+  document.documentElement.lang = lang === 'zh' ? 'zh-CN' : 'en';
+  document.title = L.title;
+  $('title').textContent = L.title;
+  $('quit').textContent = L.quit;
+  $('q').placeholder = L.placeholder;
+  $('q').setAttribute('aria-label', L.search);
+  $('sortLabel').textContent = L.sort;
+  Array.from($('sort').options).forEach((o, i) => { o.textContent = L.sorts[i]; });
+  $('help').textContent = L.help;
+  $('open').textContent = L.open; $('folder').textContent = L.folder; $('copy').textContent = L.copy;
+  $('rescan').textContent = L.rescan; $('more').textContent = L.more;
+  ['hName', 'hPath', 'hSize', 'hTime'].forEach((id, i) => { $(id).textContent = L.cols[i]; });
+  $('rule').textContent = L.rule;
+}
+
+function showIndex(st) {
+  lastStatus = st;
+  $('version').textContent = 'v' + st.version;
+  const parts = [];
+  if (st.state === 'scanning') parts.push(L.scanning(st.progress[0].toLocaleString(), st.progress[1].toLocaleString()));
+  else if (st.state === 'empty') parts.push(L.loading);
+  else parts.push(L.entries(st.entries.toLocaleString()));
+  if (st.unreadable_count) parts.push(L.unreadable(st.unreadable_count));
+  parts.push(L.watch[st.watch] || '');
+  $('index').textContent = parts.join(' · ');
+  if (alive) $('rescan').disabled = st.state !== 'ready';
+}
+let statusTimer = null;
+function pollStatus() {
+  if (!alive) return;
+  api('/api/status').then(st => {
+    const was = lastStatus && lastStatus.state;
+    showIndex(st);
+    if (was && was !== 'ready' && st.state === 'ready') search(true);
+    const next = st.state === 'ready' ? 10000 : 1000;
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(pollStatus, next);
+  }).catch(() => { clearTimeout(statusTimer); statusTimer = setTimeout(pollStatus, 3000); });
+}
+
+function updateSortUi() {
+  document.querySelectorAll('th[data-sort]').forEach(th => {
+    if (th.dataset.sort === sort) th.setAttribute('aria-sort', desc ? 'descending' : 'ascending');
+    else th.removeAttribute('aria-sort');
+  });
+  const v = sort + ':' + (desc ? 1 : 0);
+  if (Array.from($('sort').options).some(o => o.value === v)) $('sort').value = v;
+}
+
+function renderRow(r) {
+  const tr = document.createElement('tr');
+  tr.setAttribute('role', 'option');
+  tr.setAttribute('aria-selected', 'false');
+  tr.dataset.k = r.k;
+  const name = document.createElement('td');
+  name.className = 'name';
+  const kind = document.createElement('span');
+  kind.className = 'kind';
+  kind.textContent = r.folder ? '📁' : '';
+  if (r.folder) kind.setAttribute('aria-label', L.folderKind);
+  name.append(kind, document.createTextNode(r.name));
+  const dir = document.createElement('td'); dir.className = 'dir'; dir.textContent = r.dir;
+  const size = document.createElement('td'); size.className = 'size'; size.textContent = r.size_text;
+  const time = document.createElement('td'); time.className = 'time'; time.textContent = r.time;
+  tr.append(name, dir, size, time);
+  return tr;
+}
+
+function select(k, focus) {
+  const body = $('rows');
+  const old = body.querySelector('tr[aria-selected="true"]');
+  if (old) old.setAttribute('aria-selected', 'false');
+  cur = k;
+  const tr = body.children[k];
+  if (tr) {
+    tr.setAttribute('aria-selected', 'true');
+    body.setAttribute('aria-activedescendant', '');
+    if (focus) body.focus();
+    tr.scrollIntoView({block: 'nearest'});
+  }
+  ['open', 'folder', 'copy'].forEach(id => { $(id).disabled = cur < 0 || !alive; });
+  if (k >= rows.length - 20 && rows.length < count) loadMore();
+}
+
+function search(keep) {
+  if (!alive) return;
+  const my = ++seq;
+  const keepPath = keep && cur >= 0 && rows[cur] ? rows[cur].path : null;
+  const p = new URLSearchParams({page: PAGE, q: $('q').value, sort: sort, desc: desc ? '1' : '0', limit: PAGE_ROWS});
+  api('/api/search?' + p).then(j => {
+    if (my !== seq) return;
+    if (j.error) {
+      sid = null; count = 0; rows = []; $('rows').textContent = ''; select(-1);
+      setStatus(L.search_failed(j.error), 'warn');
+      $('more').style.display = 'none';
+      return;
+    }
+    sid = j.sid; count = j.count; rows = j.rows;
+    const body = $('rows');
+    body.textContent = '';
+    rows.forEach(r => body.appendChild(renderRow(r)));
+    let k = -1;
+    if (keepPath) k = rows.findIndex(r => r.path === keepPath);
+    select(k);
+    showCount(j.ms);
+    $('more').style.display = rows.length < count ? 'block' : 'none';
+  }).catch(e => { if (my === seq) setStatus(L.search_failed(e.message), 'bad'); });
+}
+
+function loadMore() {
+  if (loadingMore || !sid || rows.length >= count) return;
+  loadingMore = true;
+  const my = seq;
+  const p = new URLSearchParams({page: PAGE, sid: sid, offset: rows.length, limit: PAGE_ROWS});
+  api('/api/rows?' + p).then(j => {
+    if (my !== seq) return;
+    const body = $('rows');
+    j.rows.forEach(r => { rows.push(r); body.appendChild(renderRow(r)); });
+    $('more').style.display = rows.length < count ? 'block' : 'none';
+  }).catch(e => { if (e.status === 409) search(true); }).finally(() => { loadingMore = false; });
+}
+
+function openCurrent(folder) {
+  if (cur < 0 || !sid) return;
+  post(folder ? '/api/open_folder' : '/api/open', {page: PAGE, sid: sid, k: rows[cur].k})
+    .catch(e => setStatus(L.open_failed(e.message), 'bad'));
+}
+
+function copyCurrent() {
+  if (cur < 0) return;
+  const text = rows[cur].path;
+  const ok = () => setStatus(L.copied(text), 'ok');
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let done = false;
+    try { done = document.execCommand('copy'); } catch (e) { done = false; }
+    ta.remove();
+    if (done) ok(); else setStatus(L.copy_failed, 'bad');
+    $('rows').focus();
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(ok, fallback);
+  else fallback();
+}
+
+let timer = null;
+$('q').addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => search(false), 120); });
+$('q').addEventListener('keydown', ev => {
+  if (ev.key === 'ArrowDown' && rows.length) { ev.preventDefault(); select(Math.max(cur, 0), true); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); if (cur < 0 && rows.length) select(0); openCurrent(ev.ctrlKey); }
+  else if (ev.key === 'Escape') { $('q').value = ''; search(false); }
+});
+$('rows').addEventListener('keydown', ev => {
+  const page = 10;
+  const moves = {ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page};
+  if (ev.key in moves) {
+    ev.preventDefault();
+    if (ev.key === 'ArrowUp' && cur <= 0) { $('q').focus(); return; }
+    select(Math.max(0, Math.min(rows.length - 1, cur + moves[ev.key])), true);
+  } else if (ev.key === 'Home') { ev.preventDefault(); select(0, true); }
+  else if (ev.key === 'End') { ev.preventDefault(); select(rows.length - 1, true); }
+  else if (ev.key === 'Enter') { ev.preventDefault(); openCurrent(ev.ctrlKey); }
+  else if ((ev.ctrlKey || ev.metaKey) && (ev.key === 'c' || ev.key === 'C') && !String(window.getSelection())) {
+    ev.preventDefault(); copyCurrent();
+  } else if (ev.key === 'Escape') { $('q').focus(); }
+});
+$('rows').addEventListener('click', ev => {
+  const tr = ev.target.closest('tr');
+  if (tr) select(Array.prototype.indexOf.call($('rows').children, tr), true);
+});
+$('rows').addEventListener('dblclick', ev => { if (ev.target.closest('tr')) openCurrent(false); });
+$('open').addEventListener('click', () => openCurrent(false));
+$('folder').addEventListener('click', () => openCurrent(true));
+$('copy').addEventListener('click', copyCurrent);
+$('more').addEventListener('click', loadMore);
+$('sort').addEventListener('change', () => {
+  const [s, d] = $('sort').value.split(':');
+  sort = s; desc = d === '1';
+  updateSortUi(); search(true);
+});
+document.querySelectorAll('th[data-sort] button').forEach(b => b.addEventListener('click', () => {
+  const s = b.parentElement.dataset.sort;
+  if (s === sort) desc = !desc; else { sort = s; desc = s === 'size' || s === 'mtime'; }
+  updateSortUi(); search(true);
+}));
+$('rescan').addEventListener('click', () => {
+  $('rescan').disabled = true;
+  post('/api/rescan').then(j => {
+    setStatus(j.started ? L.rescan_started : L.rescan_busy, 'info');
+    clearTimeout(statusTimer); statusTimer = setTimeout(pollStatus, 300);
+  }).catch(e => { setStatus(e.message, 'bad'); if (alive) $('rescan').disabled = false; });
+});
+$('quit').addEventListener('click', () => { post('/api/quit').catch(() => {}).finally(serviceGone); });
+window.addEventListener('scroll', () => {
+  if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 300) loadMore();
+});
+
+api('/api/status').then(st => { applyLanguage(st.lang); showIndex(st); updateSortUi(); search(false); pollStatus(); })
+  .catch(() => { applyLanguage('zh'); updateSortUi(); search(false); pollStatus(); });
+</script>
+</body>
+</html>
