@@ -26,6 +26,19 @@ jobs:
         run: python scripts/check_repo.py
       - name: shellcheck
         run: shellcheck -S warning .githooks/* .claude/hooks/session-start.sh $(ls install.sh 2>/dev/null)
+  bench:
+    # Speed and memory on a synthetic index of a million entries (scripts/bench.py). Reported
+    # in the job summary; the limits are checked by hand when a pull request changes the core.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Benchmark
+        run: |
+          python scripts/bench.py | tee bench.txt
+          { echo '```'; cat bench.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
   scan:
     # The scanner prints only file:line and the rule under GitHub Actions, and gitleaks runs
     # with --redact, so a finding is never repeated in a log.
