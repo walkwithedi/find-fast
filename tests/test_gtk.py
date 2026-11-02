@@ -38,6 +38,8 @@ def key(keyval, state=0):
 
 @unittest.skipUnless(HAVE_GTK, 'needs python3-gi, GTK 3 and a display')
 class GtkTest(unittest.TestCase):
+    apps = 0
+
     def setUp(self):
         Gio = ui.Gio
         self.tmp = tempfile.mkdtemp(prefix='ff-gtk-')
@@ -45,7 +47,9 @@ class GtkTest(unittest.TestCase):
         make_tree(self.root)
         config = core.Config(os.path.join(self.tmp, 'config.json'), {'roots': [self.root]})
         self.index = core.Index(config, os.path.join(self.tmp, 'index.bin'), mounts={})
-        self.app = ui.Gtk.Application(application_id='io.github.walkwithedi.findfast.test%d' % os.getpid(),
+        GtkTest.apps += 1     # every test registers its own id: a session bus refuses a second export
+        self.app = ui.Gtk.Application(application_id='io.github.walkwithedi.findfast.test%d.n%d' % (os.getpid(),
+                                                                                                GtkTest.apps),
                                       flags=Gio.ApplicationFlags.NON_UNIQUE)
         self.app.register(None)
         self.quit_called = False
