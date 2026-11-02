@@ -76,3 +76,31 @@ class DesktopEntryTest(unittest.TestCase):
             out = subprocess.run([a if a != "%k" else link for a in args], capture_output=True, text=True,
                                  env=env, timeout=30).stdout.strip()
         self.assertEqual(out, os.path.join(ROOT, "find_fast.py"))
+
+
+class InstallTest(unittest.TestCase):
+    def test_install_run_and_uninstall(self):
+        import subprocess
+        import tempfile
+        with tempfile.TemporaryDirectory() as home:
+            env = dict(os.environ, HOME=home, XDG_DATA_HOME="", LANG="en_US.UTF-8")
+            p = subprocess.run(["bash", os.path.join(ROOT, "install.sh")], capture_output=True, text=True, env=env,
+                               timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertIn("custom shortcut", p.stdout)
+            cmd = os.path.join(home, ".local", "bin", "find-fast")
+            menu = os.path.join(home, ".local", "share", "applications", "find-fast.desktop")
+            self.assertTrue(os.path.islink(cmd))
+            with open(menu, encoding="utf-8") as f:
+                text = f.read()
+            self.assertIn("Name[zh_CN]=秒搜文件", text)
+            self.assertIn(os.path.join(home, ".local", "share", "find-fast", "find_fast.py"), text)
+            out = subprocess.run([cmd, "--version"], capture_output=True, text=True, env=env, timeout=60).stdout
+            with open(os.path.join(ROOT, "VERSION"), encoding="utf-8") as f:
+                self.assertEqual(out.strip(), "find-fast " + f.read().strip())
+            p = subprocess.run(["bash", os.path.join(ROOT, "install.sh"), "--uninstall"], capture_output=True,
+                               text=True, env=env, timeout=60)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            self.assertFalse(os.path.lexists(cmd))
+            self.assertFalse(os.path.exists(menu))
+            self.assertFalse(os.path.exists(os.path.join(home, ".local", "share", "find-fast")))
