@@ -57,11 +57,13 @@ async function rowNames(page) {
 
 (async () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'ff-web-'));
-  const browser = await chromium.launch();
+  // CHROMIUM_PATH: a Chromium other than the one Playwright downloads (optional)
+  const browser = await chromium.launch(process.env.CHROMIUM_PATH ? {executablePath: process.env.CHROMIUM_PATH} : {});
   let srv;
   try {
     srv = await startServer(tmp, 'zh_CN.UTF-8');
-    const ctx = await browser.newContext({viewport: {width: 1100, height: 800}});
+    // bypassCSP: the page forbids eval, which Playwright's waitForFunction needs; the page itself is unchanged
+    const ctx = await browser.newContext({viewport: {width: 1100, height: 800}, bypassCSP: true});
     await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], {origin: new URL(srv.url).origin});
     const page = await ctx.newPage();
     const errors = [];
@@ -130,7 +132,7 @@ async function rowNames(page) {
 
     // English, and the quit button
     srv = await startServer(fs.mkdtempSync(path.join(os.tmpdir(), 'ff-web-')), 'en_US.UTF-8');
-    const p2 = await (await browser.newContext()).newPage();
+    const p2 = await (await browser.newContext({bypassCSP: true})).newPage();
     await p2.goto(srv.url);
     await p2.waitForFunction(() => document.getElementById('title').textContent === 'find-fast');
     assert.strictEqual(await p2.textContent('#quit'), 'Quit');
