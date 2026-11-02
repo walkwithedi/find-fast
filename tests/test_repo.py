@@ -8,9 +8,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 class RepoTest(unittest.TestCase):
     def test_version_has_changelog_section(self):
-        version = open(os.path.join(ROOT, "VERSION"), encoding="utf-8").read().strip()
+        with open(os.path.join(ROOT, "VERSION"), encoding="utf-8") as f:
+            version = f.read().strip()
         self.assertRegex(version, r"^\d+\.\d+\.\d+$")
-        log = open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8").read()
+        with open(os.path.join(ROOT, "CHANGELOG.md"), encoding="utf-8") as f:
+            log = f.read()
         self.assertRegex(log, r"(?m)^## %s$" % re.escape(version))
 
 
