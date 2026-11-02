@@ -163,8 +163,23 @@ class CacheTest(TempTree):
         self.assertTrue(changed)
         idx.refresh()
         self.assertEqual(self.names(idx.search('new.png')), ['new.png'])
+        # folders changed within RACY_NS of a scan are listed again; older ones are reused
+        _, _, changed = core.scan([self.root], self.config.excluder(), {}, idx.base)
+        self.assertTrue(changed)
+        for d, _, _ in os.walk(self.root):
+            os.utime(d, (1700000000, 1700000000))
+        idx.refresh()
         _, _, changed = core.scan([self.root], self.config.excluder(), {}, idx.base)
         self.assertFalse(changed)
+
+    def test_change_in_the_same_tick_is_not_missed(self):
+        pics = os.path.join(self.root, 'pics')
+        idx = self.index()
+        st = os.stat(pics)
+        touch(os.path.join(pics, 'same-tick.png'))
+        os.utime(pics, ns=(st.st_atime_ns, st.st_mtime_ns))     # as if the folder time had not moved
+        idx.refresh()
+        self.assertEqual(self.names(idx.search('same-tick')), ['same-tick.png'])
 
     def test_undecodable_name(self):
         raw = os.path.join(os.fsencode(self.root), b'bad-\xff.txt')

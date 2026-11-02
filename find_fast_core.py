@@ -69,6 +69,7 @@ PSEUDO_FS = {'proc', 'sysfs', 'devtmpfs', 'devpts', 'cgroup', 'cgroup2', 'debugf
 LOCAL_FUSE = {'fuse.ntfs-3g', 'fuse.exfat', 'fuse.ext4fuse', 'fuse.fuse-ext2', 'fuse.bindfs'}
 
 PROGRESS_EVERY = 0.5        # seconds between progress reports while scanning
+RACY_NS = 2 * 10 ** 9       # a folder changed this close to its listing is listed again next time
 EXTRA_LIMIT = 200000        # overlay entries before a full rebuild is asked for
 UNREADABLE_SHOWN = 5
 
@@ -569,7 +570,10 @@ def scan(roots, excluder, mounts=None, old=None, progress=None, stop=None):
                     errors.append(d)
                     continue
                 subs = [os.path.join(d, name) for name in names]
-            records.append((d, st.st_mtime_ns, entries))
+            # Folder times have a coarse resolution: a change in the same tick as the listing
+            # would leave the time unchanged, so a folder this recent is not trusted next time.
+            mtime = 0 if st.st_mtime_ns >= time.time_ns() - RACY_NS else st.st_mtime_ns
+            records.append((d, mtime, entries))
             files += len(entries)
             stack.extend(reversed(subs))
             if progress is not None and time.monotonic() - last >= PROGRESS_EVERY:
@@ -725,7 +729,7 @@ class PathTerm(Term):
         s = self.s
         out = bytearray(n)
         if '/' not in s:
-            out = bytearray(map(str.__contains__, base.low, itertools.repeat(s)))
+            out = bytearray(compile_names([Clause([NameTerm(s)])])(base.low))
         hit = bytearray(map(str.__contains__, ds, itertools.repeat(s)))
         if _count_dir_entries(base, hit) * 4 < n:
             _consume(map(out.__setitem__, _entries_of_dirs(base, hit), itertools.repeat(1)))
