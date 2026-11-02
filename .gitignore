@@ -1,0 +1,8 @@
+__pycache__/
+*.pyc
+dist/
+.DS_Store
+# a private-terms list belongs in ~/.config/find-fast/, never here
+sensitive_terms.txt
+*.zip
+find_fast.log
