@@ -393,6 +393,86 @@ class GtkTest(unittest.TestCase):
         self.assertEqual((w2.sort, w2.desc), ('size', True))
         self.assertTrue(w2.columns['size'].get_sort_indicator())
 
+    def test_column_order_drag_settings_and_restore(self):
+        w = self.window()
+        self.type('report')
+        titles = lambda: [c.get_title() for c in w.tree.get_columns()]  # noqa: E731
+        self.assertEqual(w.column_order(), list(ui.DATA_COLUMNS))
+        cols = w.columns
+        self.assertTrue(all(cols[k].get_reorderable() for k in ui.DATA_COLUMNS))
+        self.assertFalse(cols['locate'].get_reorderable())
+        # what a header drag does; nothing may land after the locate column
+        w.tree.move_column_after(cols['size'], None)
+        self.assertEqual(w.column_order(), ['size', 'name', 'path', 'mtime'])
+        self.assertEqual(titles(), ['Size', 'Name', 'Path', 'Modified', 'Locate'])
+        self.assertFalse(w.column_drop_ok(w.tree, cols['name'], cols['locate'], None))
+        self.assertFalse(w.column_drop_ok(w.tree, cols['locate'], None, cols['size']))
+        self.assertTrue(w.column_drop_ok(w.tree, cols['name'], None, cols['size']))
+        self.assertTrue(w.column_drop_ok(w.tree, cols['name'], cols['mtime'], cols['locate']))
+        pump(0.05)
+        self.assertEqual(w.store[0][1], 'Report 2024.pdf')        # cells keep their data
+        # the same in Settings, by keyboard-reachable buttons; applied on Save
+        s = w.open_settings()
+        self.assertEqual(s.order, ['size', 'name', 'path', 'mtime'])
+        rows = s.columns_box.get_children()
+        self.assertEqual(len(rows), 4)
+        first = [b for b in rows[0].get_child().get_children() if isinstance(b, ui.Gtk.Button)]
+        self.assertFalse(first[0].get_sensitive())
+        self.assertTrue(first[1].get_sensitive())
+        self.assertEqual(first[1].get_accessible().get_name(), 'Move Size down')
+        s.move_column(0, 1)
+        self.assertEqual(s.order, ['name', 'size', 'path', 'mtime'])
+        s.reset_columns()
+        self.assertEqual(s.order, list(ui.DATA_COLUMNS))
+        s.move_column(3, -1)
+        self.assertEqual(s.order, ['name', 'path', 'mtime', 'size'])
+        self.assertEqual(w.column_order(), ['size', 'name', 'path', 'mtime'])     # not before Save
+        self.assertEqual(s.save(), 'saved')
+        self.assertEqual(w.column_order(), ['name', 'path', 'mtime', 'size'])
+        self.assertEqual(titles()[-1], 'Locate')
+        w.on_delete()
+        self.assertTrue(pump(until=lambda: self.quit_called))
+        state = ui.load_ui_state(os.path.join(self.tmp, 'ui-state.json'))
+        self.assertEqual(state['order'], ['name', 'path', 'mtime', 'size'])
+        w.win.destroy()
+        w2 = self.w = ui.Window(self.app, self.index, 'en')
+        self.assertEqual(w2.column_order(), ['name', 'path', 'mtime', 'size'])
+        self.assertIs(w2.tree.get_columns()[-1], w2.columns['locate'])
+
+    def test_match_path_setting(self):
+        w = self.window()
+        self.type('old 2019')
+        self.assertEqual(self.names(), ['report-2019.pdf'])
+        s = w.open_settings()
+        self.assertTrue(s.match_path.get_active())
+        s.match_path.set_active(False)
+        self.assertEqual(s.save(), 'saved')
+        pump(0.05)
+        self.assertEqual(self.names(), [])
+        self.assertFalse(core.Config(os.path.join(self.tmp, 'config.json')).match_path())
+        self.assertEqual(self.index.state, 'ready')            # no rescan for this setting
+        s = w.open_settings()
+        self.assertFalse(s.match_path.get_active())
+        s.move_column(0, 1)
+        s.restore_defaults()
+        self.assertTrue(s.match_path.get_active())
+        self.assertEqual(s.order, list(ui.DATA_COLUMNS))
+        self.assertEqual(s.keys['toggle'], ui.DEFAULT_TOGGLE)
+        s.dialog.destroy()
+
+    def test_notice_shown_after_loading(self):
+        self.w = ui.Window(self.app, self.index, 'en', notice=('Shortcut note.', 'warn'))
+        self.w.quit = lambda: setattr(self, 'quit_called', True)
+        self.w.start()
+        w = self.w
+        self.assertTrue(pump(until=lambda: self.index.state == 'ready' and not w.worker.is_alive()))
+        pump(0.2)
+        # kept over the searches that follow loading, until the user types
+        self.assertEqual(w.hint.get_text(), 'Shortcut note.')
+        self.assertIsNone(w.notice)
+        self.type('report')
+        self.assertTrue(w.status.get_text().startswith('3 results'))
+
     def test_bad_ui_state_uses_defaults(self):
         state = os.path.join(self.tmp, 'ui-state.json')
         with open(state, 'w') as f:
@@ -404,13 +484,23 @@ class GtkTest(unittest.TestCase):
         import json
         with open(state, 'w') as f:
             json.dump({'width': 'wide', 'height': 500, 'sort': 'colour', 'desc': 1, 'maximized': False,
-                       'columns': {'name': 3, 'path': -5, 'bogus': 50}, 'x': 10}, f)
+                       'columns': {'name': 3, 'path': -5, 'bogus': 50}, 'x': 10,
+                       'order': ['name', 'name', 'size', 'mtime']}, f)
         self.assertEqual(ui.load_ui_state(state), {'height': 500, 'maximized': False,
                                                    'columns': {'name': ui.MIN_COLUMN_WIDTH}, 'x': 10})
         w = self.window(start=False)
         self.assertEqual(w.win.get_default_size(), (ui.DEFAULT_SIZE[0], 500))
         self.assertEqual(w.columns['path'].get_fixed_width(), ui.COLUMN_WIDTHS['path'])
         self.assertEqual(w.sort, core.DEFAULT_SORT)
+        self.assertEqual(w.column_order(), list(ui.DATA_COLUMNS))
+        for bad in ('name', ['name', 'path', 'size'], ['name', 'path', 'size', 'mtime', 'locate'],
+                    ['name', 'path', 'size', 'bogus'], [1, 2, 3, 4]):
+            with open(state, 'w') as f:
+                json.dump({'order': bad}, f)
+            self.assertEqual(ui.load_ui_state(state), {}, bad)
+        with open(state, 'w') as f:
+            json.dump({'order': ['mtime', 'size', 'path', 'name']}, f)
+        self.assertEqual(ui.load_ui_state(state), {'order': ['mtime', 'size', 'path', 'name']})
         self.assertFalse(w.can_place(-50000, -50000))
         self.assertTrue(w.can_place(0, 0))
 

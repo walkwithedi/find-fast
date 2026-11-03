@@ -70,6 +70,10 @@
                           border-radius:6px; background:var(--bg); color:var(--text); }
   .row .grow { flex:1 1 auto; }
   .check { display:block; margin:12px 0 0; }
+  .check + .check { margin-top:4px; }
+  th[draggable="true"].drop-before { box-shadow:inset 3px 0 0 var(--accent); }
+  th[draggable="true"].drop-after { box-shadow:inset -3px 0 0 var(--accent); }
+  th[draggable="true"].dragging { opacity:.5; }
   #setMsg { margin:8px 0 0; white-space:pre-line; }
   #setMsg.ok { color:var(--ok); } #setMsg.warn { color:var(--warn); } #setMsg.bad { color:var(--bad); } #setMsg.info { color:var(--info); }
   #ctx { position:fixed; z-index:10; min-width:200px; max-width:calc(100vw - 16px); background:var(--card);
@@ -150,6 +154,12 @@
       <button type="button" id="addRule">添加</button>
     </div>
     <label class="check"><input type="checkbox" id="setHidden"> <span id="setHiddenL">索引隐藏文件和文件夹</span></label>
+    <label class="check"><input type="checkbox" id="setMatchPath"> <span id="setMatchPathL">搜索词也匹配路径（所在文件夹的名称）</span></label>
+    <h3 id="setColumnsH">列顺序</h3>
+    <ul id="setColumns" class="items" aria-labelledby="setColumnsH"></ul>
+    <div class="row">
+      <button type="button" id="colDefaults">恢复默认顺序</button>
+    </div>
     <div id="setMsg" role="status" aria-live="polite"></div>
     <div class="row">
       <button type="button" id="setDefaults">恢复默认</button>
@@ -169,9 +179,10 @@ const PAGE_ROWS = 200;
 const $ = id => document.getElementById(id);
 const T = {
   zh: {
-    title: '秒搜文件', quit: '退出', search: '搜索', placeholder: '搜索文件名……', sort: '排序',
+    title: '秒搜文件', quit: '退出', search: '搜索', placeholder: '搜索文件名或所在文件夹……', sort: '排序',
     sorts: ['最新在前', '最旧在前', '名称 A→Z', '名称 Z→A', '路径 A→Z', '最大在前', '最小在前'],
-    help: '多个词同时匹配；a|b 任一；!a 排除；* ? 通配整个文件名；ext:pdf;docx；path: 或带 / 的词匹配完整路径；regex: 正则。',
+    help: '多个词同时匹配，词可以在文件名里，也可以在所在文件夹的名称里；a|b 任一；!a 排除；* ? 通配整个文件名；ext:pdf;docx；path: 或带 / 的词匹配完整路径；regex: 正则。',
+    helpNames: '多个词同时匹配（只看文件名）；a|b 任一；!a 排除；* ? 通配整个文件名；ext:pdf;docx；path: 或带 / 的词匹配完整路径；regex: 正则。',
     open: '打开', folder: '定位', copy: '复制路径', colLocate: '定位',
     locateTip: '在文件管理器中打开所在文件夹并选中', locateItem: n => '定位 ' + n,
     locatedFolder: '已打开所在文件夹，文件管理器不支持自动选中', rescan: '重新扫描', more: '显示更多',
@@ -187,6 +198,9 @@ const T = {
     closed: '服务已退出，可关闭本页。需要再用时重新双击「双击运行」。',
     rule: '关闭本页后服务数秒内自动退出；点「退出」立即结束。', folderKind: '文件夹',
     settings: '设置', setRoots: '索引的文件夹', setExclude: '排除', setHidden: '索引隐藏文件和文件夹',
+    setMatchPath: '搜索词也匹配路径（所在文件夹的名称）', setColumns: '列顺序', colUp: '上移', colDown: '下移',
+    colUpItem: c => '上移「' + c + '」', colDownItem: c => '下移「' + c + '」', colDefaults: '恢复默认顺序',
+    dragTip: '拖动列头可调整列顺序',
     addFolder: '添加文件夹……', add: '添加', remove: '删除', removeItem: x => '删除 ' + x,
     rulePh: '名称规则，如 node_modules、*.tmp', rootPh: '输入文件夹的完整路径',
     defaults: '恢复默认', cancel: '取消', save: '保存', saveAnyway: '仍然保存',
@@ -201,9 +215,10 @@ const T = {
     excludeQ: p => '排除 ' + p + '？\n\n这个文件夹及其中的全部条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
   },
   en: {
-    title: 'find-fast', quit: 'Quit', search: 'Search', placeholder: 'Search file names...', sort: 'Sort',
+    title: 'find-fast', quit: 'Quit', search: 'Search', placeholder: 'Search names and folders...', sort: 'Sort',
     sorts: ['Newest first', 'Oldest first', 'Name A→Z', 'Name Z→A', 'Path A→Z', 'Largest first', 'Smallest first'],
-    help: 'Words must all match; a|b either; !a not; * ? match a whole name; ext:pdf;docx; path: or a word with / matches the whole path; regex: a regular expression.',
+    help: 'Words must all match, each in the name or in the name of a folder above it; a|b either; !a not; * ? match a whole name; ext:pdf;docx; path: or a word with / matches the whole path; regex: a regular expression.',
+    helpNames: 'Words must all match (names only); a|b either; !a not; * ? match a whole name; ext:pdf;docx; path: or a word with / matches the whole path; regex: a regular expression.',
     open: 'Open', folder: 'Locate', copy: 'Copy path', colLocate: 'Locate',
     locateTip: 'Open the containing folder in the file manager and select the item', locateItem: n => 'Locate ' + n,
     locatedFolder: 'Opened the containing folder; the file manager cannot select the item', rescan: 'Rescan', more: 'Show more',
@@ -219,6 +234,9 @@ const T = {
     closed: 'The service has stopped; you can close this page. Double-click the launcher to start it again.',
     rule: 'Closing this page stops the service within seconds; Quit stops it at once.', folderKind: 'Folder',
     settings: 'Settings', setRoots: 'Indexed folders', setExclude: 'Excluded', setHidden: 'Index hidden files and folders',
+    setMatchPath: 'Search words also match the path (names of the folders above)', setColumns: 'Column order',
+    colUp: 'Move up', colDown: 'Move down', colUpItem: c => 'Move ' + c + ' up', colDownItem: c => 'Move ' + c + ' down',
+    colDefaults: 'Default order', dragTip: 'Drag a column header to move the column',
     addFolder: 'Add folder...', add: 'Add', remove: 'Remove', removeItem: x => 'Remove ' + x,
     rulePh: 'Name rule, such as node_modules or *.tmp', rootPh: 'Full path of a folder',
     defaults: 'Restore defaults', cancel: 'Cancel', save: 'Save', saveAnyway: 'Save anyway',
@@ -235,6 +253,16 @@ const T = {
 };
 let L = T.zh;
 let alive = true;
+let matchPath = true, pendingNotice = null;
+
+// ---------------------------------------------------------------- column order (kept in this browser)
+const COLS = ['name', 'path', 'size', 'mtime'];
+const COL_KEY = 'find-fast.columns';
+function validOrder(o) { return Array.isArray(o) && o.length === COLS.length && COLS.every(c => o.includes(c)); }
+let colOrder = COLS.slice();
+try { const o = JSON.parse(localStorage.getItem(COL_KEY)); if (validOrder(o)) colOrder = o; } catch (e) { /* defaults */ }
+function saveOrder() { try { localStorage.setItem(COL_KEY, JSON.stringify(colOrder)); } catch (e) { /* not kept */ } }
+function colName(k) { return L.cols[COLS.indexOf(k)]; }
 let sort = 'mtime', desc = true;
 let sid = null, count = 0, rows = [], cur = -1, seq = 0, loadingMore = false, lastStatus = null;
 
@@ -295,7 +323,7 @@ function applyLanguage(lang) {
   $('q').setAttribute('aria-label', L.search);
   $('sortLabel').textContent = L.sort;
   Array.from($('sort').options).forEach((o, i) => { o.textContent = L.sorts[i]; });
-  $('help').textContent = L.help;
+  $('help').textContent = matchPath ? L.help : L.helpNames;
   $('open').textContent = L.open; $('folder').textContent = L.folder; $('copy').textContent = L.copy;
   $('folder').title = L.locateTip; $('mFolder').title = L.locateTip; $('hLoc').textContent = L.colLocate;
   $('rescan').textContent = L.rescan; $('more').textContent = L.more;
@@ -303,7 +331,9 @@ function applyLanguage(lang) {
   $('rule').textContent = L.rule;
   $('gear').setAttribute('aria-label', L.settings); $('gear').title = L.settings;
   $('setTitle').textContent = L.settings; $('setRootsH').textContent = L.setRoots; $('setExcludeH').textContent = L.setExclude;
-  $('setHiddenL').textContent = L.setHidden;
+  $('setHiddenL').textContent = L.setHidden; $('setMatchPathL').textContent = L.setMatchPath;
+  $('setColumnsH').textContent = L.setColumns; $('colDefaults').textContent = L.colDefaults;
+  document.querySelectorAll('th[data-sort]').forEach(th => { th.title = L.dragTip; });
   ['addRoot', 'addExcludeFolder'].forEach(id => { $(id).textContent = L.addFolder; });
   ['addRootPath', 'addRule'].forEach(id => { $(id).textContent = L.add; });
   $('ruleIn').placeholder = L.rulePh; $('ruleIn').setAttribute('aria-label', L.rulePh);
@@ -316,6 +346,10 @@ function applyLanguage(lang) {
 
 function showIndex(st) {
   lastStatus = st;
+  if (typeof st.match_path === 'boolean' && st.match_path !== matchPath) {
+    matchPath = st.match_path;
+    $('help').textContent = matchPath ? L.help : L.helpNames;
+  }
   $('version').textContent = 'v' + st.version;
   const parts = [];
   if (st.state === 'scanning') parts.push(L.scanning(st.progress[0].toLocaleString(), st.progress[1].toLocaleString()));
@@ -378,7 +412,8 @@ function renderRow(r) {
   lb.type = 'button'; lb.className = 'locate'; lb.textContent = '⌕';
   lb.setAttribute('aria-label', L.locateItem(r.name)); lb.title = L.locateItem(r.name) + '\n' + L.locateTip;
   loc.append(lb);
-  tr.append(name, dir, size, time, loc);
+  const cells = {name: name, path: dir, size: size, mtime: time};
+  tr.append(...colOrder.map(k => cells[k]), loc);
   return tr;
 }
 
@@ -419,6 +454,7 @@ function search(keep) {
     if (keepPath) k = rows.findIndex(r => r.path === keepPath);
     select(k);
     showCount(j.ms);
+    if (pendingNotice) { setStatus(pendingNotice.text, pendingNotice.kind); pendingNotice = null; }
     $('more').style.display = rows.length < count ? 'block' : 'none';
     if (versions === 'pending') refreshMarks(my, 0);
   }).catch(e => { if (my === seq) setStatus(L.search_failed(e.message), 'bad'); });
@@ -561,7 +597,7 @@ window.addEventListener('scroll', () => {
 
 
 // ---------------------------------------------------------------- settings
-let setData = null, setRootsList = [], setExcludeList = [];
+let setData = null, setRootsList = [], setExcludeList = [], setColOrder = COLS.slice();
 function setMsg(text, kind) { const m = $('setMsg'); m.className = kind || ''; m.textContent = text; }
 function renderItems(id, list) {
   const ul = $(id);
@@ -597,6 +633,9 @@ function openSettings() {
     setData = j;
     setRootsList = j.roots.slice(); setExcludeList = j.exclude.slice();
     $('setHidden').checked = j.hidden;
+    $('setMatchPath').checked = j.match_path !== false;
+    setColOrder = colOrder.slice();
+    renderColumns();
     usePicker(j.can_pick);
     renderSettings(); setMsg('');
     if (!$('settings').open) $('settings').showModal();
@@ -613,9 +652,20 @@ function pick(list, button) {
 }
 function saveSettings(force) {
   ['setSave', 'setAnyway'].forEach(id => { $(id).disabled = true; });
-  post('/api/settings', {roots: setRootsList, exclude: setExcludeList, hidden: $('setHidden').checked, force: !!force})
+  const mp = $('setMatchPath').checked;
+  post('/api/settings', {roots: setRootsList, exclude: setExcludeList, hidden: $('setHidden').checked,
+                         match_path: mp, force: !!force})
     .then(j => {
-      if (j.saved) { $('settings').close(); startApply(); return; }
+      if (j.saved) {
+        $('settings').close();
+        matchPath = mp;
+        $('help').textContent = matchPath ? L.help : L.helpNames;
+        if (!validOrder(setColOrder) || setColOrder.join() !== colOrder.join()) {
+          colOrder = setColOrder.slice(); saveOrder(); applyColumns();
+        }
+        if (j.rescan) startApply(); else search(true);
+        return;
+      }
       if (j.blocked) { setMsg(L.setBlocked(j.problems[0]), 'bad'); $('setAnyway').hidden = true; return; }
       setMsg([L.setWarn].concat(j.problems.map(p => '· ' + p)).join('\n'), 'warn');
       $('setAnyway').hidden = false;
@@ -639,13 +689,93 @@ $('setDefaults').addEventListener('click', () => {
   if (!setData) return;
   setRootsList = setData.defaults.roots.slice(); setExcludeList = setData.defaults.exclude.slice();
   $('setHidden').checked = setData.defaults.hidden;
+  $('setMatchPath').checked = setData.defaults.match_path !== false;
+  setColOrder = COLS.slice(); renderColumns();
   renderSettings(); setMsg('');
 });
+$('setMatchPath').addEventListener('change', () => { $('setAnyway').hidden = true; setMsg(''); });
+$('colDefaults').addEventListener('click', () => { setColOrder = COLS.slice(); renderColumns(); });
 $('setHidden').addEventListener('change', () => { $('setAnyway').hidden = true; setMsg(''); });
 $('setCancel').addEventListener('click', () => $('settings').close());
 $('setSave').addEventListener('click', () => saveSettings(false));
 $('setAnyway').addEventListener('click', () => saveSettings(true));
 $('settings').addEventListener('close', () => { if (alive) $('q').focus(); });
+
+function renderColumns(focusKey, focusDir) {
+  const ul = $('setColumns');
+  ul.textContent = '';
+  setColOrder.forEach((k, i) => {
+    const li = document.createElement('li');
+    const span = document.createElement('span'); span.textContent = colName(k);
+    const btns = document.createElement('span');
+    [[-1, L.colUp, L.colUpItem], [1, L.colDown, L.colDownItem]].forEach(([d, text, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = text; b.dataset.dir = d;
+      b.setAttribute('aria-label', label(colName(k)));
+      b.disabled = i + d < 0 || i + d >= setColOrder.length;
+      b.addEventListener('click', () => {
+        const j = i + d;
+        [setColOrder[i], setColOrder[j]] = [setColOrder[j], setColOrder[i]];
+        renderColumns(k, d);
+      });
+      btns.append(b, ' ');
+    });
+    li.append(span, btns);
+    ul.appendChild(li);
+    if (k === focusKey) {
+      let b = btns.querySelector('button[data-dir="' + focusDir + '"]');
+      if (b.disabled) b = btns.querySelector('button:not([disabled])');
+      if (b) b.focus();
+    }
+  });
+}
+
+function applyColumns() {
+  const tr = document.querySelector('thead tr');
+  colOrder.forEach(k => tr.insertBefore(tr.querySelector('th[data-sort="' + k + '"]'), $('hLoc')));
+  const body = $('rows');
+  if (!body.children.length) return;
+  body.textContent = '';
+  rows.forEach(r => body.appendChild(renderRow(r)));
+  if (cur >= 0 && body.children[cur]) body.children[cur].setAttribute('aria-selected', 'true');
+}
+
+// drag a header to move its column; the locate column stays last
+let dragKey = null;
+function clearDrop() {
+  document.querySelectorAll('th.drop-before, th.drop-after, th.dragging')
+    .forEach(th => th.classList.remove('drop-before', 'drop-after', 'dragging'));
+}
+document.querySelectorAll('th[data-sort]').forEach(th => {
+  th.draggable = true;
+  th.addEventListener('dragstart', ev => {
+    dragKey = th.dataset.sort;
+    th.classList.add('dragging');
+    ev.dataTransfer.effectAllowed = 'move';
+    ev.dataTransfer.setData('text/plain', dragKey);
+  });
+  th.addEventListener('dragover', ev => {
+    if (!dragKey || dragKey === th.dataset.sort) return;
+    ev.preventDefault();
+    const r = th.getBoundingClientRect();
+    const before = ev.clientX < r.left + r.width / 2;
+    th.classList.toggle('drop-before', before);
+    th.classList.toggle('drop-after', !before);
+  });
+  th.addEventListener('dragleave', () => th.classList.remove('drop-before', 'drop-after'));
+  th.addEventListener('drop', ev => {
+    ev.preventDefault();
+    const key = dragKey, target = th.dataset.sort;
+    if (!key || key === target) { clearDrop(); return; }
+    const r = th.getBoundingClientRect();
+    const before = ev.clientX < r.left + r.width / 2;
+    const order = colOrder.filter(k => k !== key);
+    order.splice(order.indexOf(target) + (before ? 0 : 1), 0, key);
+    colOrder = order; saveOrder(); applyColumns();
+    clearDrop(); dragKey = null;
+  });
+  th.addEventListener('dragend', () => { clearDrop(); dragKey = null; });
+});
 
 // ---------------------------------------------------------------- context menu
 function menuItems() { return Array.from($('ctx').querySelectorAll('button')).filter(b => !b.hidden); }
@@ -711,8 +841,11 @@ document.addEventListener('mousedown', ev => { if (!$('ctx').hidden && !ev.targe
 window.addEventListener('blur', closeMenu);
 window.addEventListener('resize', closeMenu);
 
-api('/api/status').then(st => { applyLanguage(st.lang); showIndex(st); updateSortUi(); search(false); pollStatus(); })
-  .catch(() => { applyLanguage('zh'); updateSortUi(); search(false); pollStatus(); });
+api('/api/status').then(st => {
+  if (st.notice) pendingNotice = st.notice;
+  if (typeof st.match_path === 'boolean') matchPath = st.match_path;
+  applyLanguage(st.lang); applyColumns(); showIndex(st); updateSortUi(); search(false); pollStatus();
+}).catch(() => { applyLanguage('zh'); applyColumns(); updateSortUi(); search(false); pollStatus(); });
 </script>
 </body>
 </html>

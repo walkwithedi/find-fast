@@ -47,6 +47,9 @@ def build_parser():
                     help='show the window, or hide it when it is in front (for a global shortcut)')
     ap.add_argument('--remove-hotkey', action='store_true',
                     help='remove the global shortcut this tool wrote into the desktop settings')
+    ap.add_argument('--default-hotkey', action='store_true',
+                    help='write the default global shortcut (Ctrl+Alt+Space) into the desktop settings when '
+                         'none was ever set, or write the one set again with the current command (install.sh)')
     ap.add_argument('--config', default=core.CONFIG_FILE, help=argparse.SUPPRESS)
     ap.add_argument('--cache', default=core.CACHE_FILE, help=argparse.SUPPRESS)
     ap.add_argument('--version', action='version', version='find-fast ' + core.VERSION)
@@ -147,6 +150,12 @@ def main(argv=None):
         import find_fast_gtk
         removed = find_fast_gtk.DesktopHotkey().remove()
         log.info('global shortcut %s', 'removed' if removed else 'not found')
+        return 0
+    if args.default_hotkey:
+        import find_fast_gtk
+        notice = find_fast_gtk.ensure_default_toggle(core.Config(args.config), refresh=True)
+        if notice:
+            print(notice[0])
         return 0
     cli = bool(args.query) or args.count or args.status or args.rebuild or args.update
     if cli:

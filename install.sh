@@ -70,12 +70,19 @@ DESKTOP
 mv "$MENU.tmp" "$MENU"
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$(dirname "$MENU")" 2>/dev/null || true
 
+# the default show-or-hide shortcut (Ctrl+Alt+Space) goes into the desktop settings now, so it
+# works before the tool was ever started; one set earlier is pointed at the installed command
+HOTKEY="$(python3 "$DEST/find_fast.py" --default-hotkey 2>/dev/null || true)"
+
 say "已安装到 $DEST。
 命令：find-fast（在 $BIN；该目录不在 PATH 时用完整路径）
 应用菜单：秒搜文件
-唤起快捷键：在窗口的「设置」→「快捷键」里设置；也可在系统设置里新建自定义快捷键，命令填：$BIN/find-fast --toggle" \
+唤起快捷键：在窗口的「设置」→「快捷键」里修改；也可在系统设置里新建自定义快捷键，命令填：$BIN/find-fast --toggle" \
 "Installed to $DEST.
 Command: find-fast (in $BIN; use the full path when that folder is not in PATH)
 Menu entry: find-fast
-Hotkey: set it in the window under Settings > Shortcuts, or add a custom shortcut in the system keyboard settings with the command: $BIN/find-fast --toggle"
+Hotkey: change it in the window under Settings > Shortcuts, or add a custom shortcut in the system keyboard settings with the command: $BIN/find-fast --toggle"
+if [ -n "$HOTKEY" ]; then
+  echo "$HOTKEY"
+fi
 case ":$PATH:" in *":$BIN:"*) ;; *) say "注意：$BIN 不在 PATH 中。" "Note: $BIN is not in PATH." ;; esac

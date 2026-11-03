@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.3.0
+
+- Plain search words match the whole path: each word may be in the name or in the name of any folder above it, so `atlas 28` finds `~/Documents/Atlas/report 28.pdf`. `!word` leaves out entries with the word anywhere in their path; in `a|b` each alternative follows its own kind. Wildcards, `ext:`, `regex:` and the regular-expression mode still look at names only; `path:` and words with `/` are unchanged. Words found in no folder path keep the name-only search, and the folder matches of recent words are kept while typing.
+- Settings: Search words also match the path (`match_path` in `config.json`, on by default) turns this off; changing it searches again without a rescan. In the window, on the browser page and on the command line.
+- Result columns can be reordered: drag a header (window and browser page; the locate column stays last), or use Move up, Move down and Default order under Column order in Settings. The window keeps the order in `ui-state.json` (`order`), the page in that browser; a bad order falls back to name, path, size, modified.
+- Default global show-or-hide shortcut Ctrl+Alt+Space. `install.sh` writes it (new `--default-hotkey`), so it works before the tool was ever started; a tool run from an unpacked folder writes it on its first start. It is written once, only when no shortcut was ever set (`toggle_default_done` in `config.json`), and never over a desktop shortcut on the same keys; otherwise the installer output and the status bar or status line say why. `install.sh` also points a shortcut set earlier at the installed command. Restore defaults in Settings sets Ctrl+Alt+Space again.
+- A start-up notice stays in the window's status bar until typing or 30 seconds.
+
 ## 0.2.0
 
 - Hovering a result row shows its full path, in the GTK window and on the browser page.

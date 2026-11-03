@@ -135,6 +135,7 @@ class WebState:
         self.worker = None
         self.opener = open_path
         self.folder_opener = show_in_folder
+        self.notice = None          # (message, kind) about the global shortcut, shown by the page once
 
     def ping(self, page):
         with self.lock:
@@ -192,12 +193,14 @@ class WebState:
 
     def settings(self):
         c = self.index.config
-        return {'roots': c.roots, 'exclude': c.exclude, 'hidden': c.hidden,
-                'defaults': {'roots': core.DEFAULT_ROOTS, 'exclude': core.DEFAULT_EXCLUDE, 'hidden': False},
+        return {'roots': c.roots, 'exclude': c.exclude, 'hidden': c.hidden, 'match_path': c.match_path(),
+                'defaults': {'roots': core.DEFAULT_ROOTS, 'exclude': core.DEFAULT_EXCLUDE, 'hidden': False,
+                             'match_path': True},
                 'can_pick': bool(shutil.which('zenity'))}
 
-    def save_settings(self, roots, exclude, hidden, force=False):
-        """{'saved': True} or {'saved': False, 'problems': [...], 'blocked': bool}."""
+    def save_settings(self, roots, exclude, hidden, force=False, match_path=None):
+        """{'saved': True, 'rescan': bool} or {'saved': False, 'problems': [...], 'blocked': bool}.
+        A change that keeps the index scope (only match_path) is saved without rescanning."""
         roots, exclude = core.tidy_scope(roots, exclude)
         problems = core.check_scope(roots, exclude, self.index.mounts)
         blocked = any(code == 'no_roots' for _, _, code in problems)
@@ -206,8 +209,17 @@ class WebState:
             return {'saved': False, 'blocked': blocked,
                     'problems': [core.scope_problem_text(item, code, lang) for _, item, code in problems]}
         c = self.index.config
-        self.apply_scope(c.with_scope(roots, exclude, hidden))
-        return {'saved': True}
+        new = c.with_scope(roots, exclude, hidden)
+        if match_path is not None:
+            new.other['match_path'] = bool(match_path)
+        if (new.resolved_roots() == c.resolved_roots() and new.exclude == c.exclude
+                and new.hidden == c.hidden):
+            new.save()
+            with self.index.lock:
+                self.index.config = new
+            return {'saved': True, 'rescan': False}
+        self.apply_scope(new)
+        return {'saved': True, 'rescan': True}
 
     def exclude(self, page, sid, k):
         """Exclude the folder of result row k (the row itself when it is a folder)."""
@@ -409,6 +421,9 @@ class Handler(BaseHTTPRequestHandler):
             status = st.index.status()
             status['lang'] = core.ui_language()
             status['applying'] = st.is_applying()
+            status['match_path'] = st.index.config.match_path()
+            if st.notice:
+                status['notice'] = {'text': st.notice[0], 'kind': st.notice[1]}
             self.send_json(200, status)
         elif url.path == '/api/search':
             try:
@@ -483,7 +498,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 out = st.save_settings([r for r in roots if isinstance(r, str)],
                                        [e for e in exclude if isinstance(e, str)],
-                                       bool(data.get('hidden')), bool(data.get('force')))
+                                       bool(data.get('hidden')), bool(data.get('force')),
+                                       data.get('match_path') if isinstance(data.get('match_path'), bool) else None)
             except OSError as e:
                 self.send_json(500, {'error': msg('save_failed', error=e.strerror or e)})
                 return
@@ -541,6 +557,8 @@ def main(args=None):
     config = core.Config(getattr(args, 'config', core.CONFIG_FILE))
     index = core.Index(config, getattr(args, 'cache', core.CACHE_FILE))
     server, st = make_server(index)
+    import find_fast_gtk        # the desktop shortcut code needs no GTK
+    st.notice = find_fast_gtk.ensure_default_toggle(config)
     url = '%s/?t=%s' % (st.origin, st.token)
     log.info('serving on %s', st.origin)
     print('find-fast: ' + url, flush=True)

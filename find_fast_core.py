@@ -190,6 +190,11 @@ class Config:
         data.update({'roots': list(roots), 'exclude': list(exclude), 'hidden': bool(hidden)})
         return Config(self.path, data)
 
+    def match_path(self):
+        """Plain search words also match folder names in the path (the default)."""
+        v = self.other.get('match_path', True)
+        return v if isinstance(v, bool) else True
+
     def save(self):
         write_private(self.path, json.dumps(self.data(), ensure_ascii=False, indent=2).encode('utf-8'))
 
@@ -361,6 +366,7 @@ def fs_excluded(fstype):
 
 # ---------------------------------------------------------------- the index
 
+WORD_HITS_KEPT = 16             # folder matches of recent search words kept per index snapshot
 LOWER_CHUNK = 65536             # names lower-cased per step while loading (bounds the peak memory)
 
 
@@ -419,6 +425,9 @@ class Base:
         self.low = lower_split(names_blob, name_off) if low is None else low
         self.n = len(sizes)
         self._dirs_slash = None
+        self._dirs_text = None
+        self._word_hits = collections.OrderedDict()
+        self._word_lock = threading.Lock()
         self._dir_index = None
         self._dir_keys = {}
 
@@ -428,6 +437,26 @@ class Base:
         if self._dirs_slash is None:
             self._dirs_slash = [d if d.endswith('/') else d + '/' for d in map(str.lower, self.dirs)]
         return self._dirs_slash
+
+    def word_hit(self, word):
+        """0/1 per folder whose lower-case path contains word, or None when none does. The last
+        few answers are kept, since typing repeats the same words."""
+        hits = self._word_hits
+        with self._word_lock:
+            if word in hits:
+                hits.move_to_end(word)
+                return hits[word]
+            if self._dirs_text is None:
+                self._dirs_text = '\n'.join(self.dirs_slash)
+            text = self._dirs_text
+        hit = None
+        if word in text:
+            hit = bytes(map(str.__contains__, self.dirs_slash, itertools.repeat(word)))
+        with self._word_lock:
+            hits[word] = hit
+            if len(hits) > WORD_HITS_KEPT:
+                hits.popitem(last=False)
+        return hit
 
     def name(self, i):
         return decode_name(self.names_blob[self.name_off[i]:self.name_off[i + 1] - 1])
@@ -884,7 +913,9 @@ class PathTerm(Term):
         out = bytearray(n)
         if '/' not in s:
             out = bytearray(compile_names([Clause([NameTerm(s)])])(base.low))
-        hit = bytearray(map(str.__contains__, ds, itertools.repeat(s)))
+        hit = getattr(self, 'hit', None)
+        if hit is None:
+            hit = bytes(map(str.__contains__, ds, itertools.repeat(s)))
         if _count_dir_entries(base, hit) * 4 < n:
             _consume(map(out.__setitem__, _entries_of_dirs(base, hit), itertools.repeat(1)))
         else:
@@ -914,6 +945,43 @@ class PathTerm(Term):
         return self.s in full
 
 
+class WordTerm(PathTerm):
+    """A plain word matched anywhere in the whole path: in the name or in the path of a folder
+    above it. Over a base it is resolved first (resolve_words): `hit` holds one 0/1 per folder
+    whose path contains the word, and a word no folder path contains becomes a NameTerm."""
+    kind = 'word'
+
+    def __init__(self, s, hit=None):
+        PathTerm.__init__(self, s)
+        self.hit = hit
+
+    def expr(self, env, k):
+        env['H%d' % k] = self.hit
+        return '%r in s or H%d[d]' % (self.s, k)
+
+    def match(self, low, dir_slash):
+        return self.s in low or self.s in dir_slash
+
+
+def resolve_words(base, clauses):
+    """Clauses for this base: every WordTerm gets the folders whose path contains it, or becomes
+    a NameTerm when there is none, so that such words keep the name-only search."""
+    if not any(type(t) is WordTerm and t.hit is None for c in clauses for t in c.alts):
+        return clauses
+    out = []
+    for c in clauses:
+        if any(type(t) is WordTerm for t in c.alts):
+            alts = []
+            for t in c.alts:
+                if type(t) is WordTerm and t.hit is None:
+                    hit = base.word_hit(t.s)
+                    t = NameTerm(t.s) if hit is None else WordTerm(t.s, hit)
+                alts.append(t)
+            c = Clause(alts, c.negate)
+        out.append(c)
+    return out
+
+
 class Clause:
     """Alternatives joined by |, possibly negated with a leading !."""
 
@@ -924,6 +992,11 @@ class Clause:
     @property
     def names_only(self):
         return all(t.kind == 'name' for t in self.alts)
+
+    @property
+    def per_entry(self):
+        """Every term is decided by the name and, for words, the folder number alone."""
+        return all(t.kind in ('name', 'word') for t in self.alts)
 
     def match(self, low, dir_slash):
         hit = any(t.match(low, dir_slash) for t in self.alts)
@@ -962,8 +1035,9 @@ def regex_term(pattern):
     return PatternTerm(rx, required_literal(pattern, re.IGNORECASE))
 
 
-def parse_term(t):
-    """One alternative: ext:, path:, regex:, a path (contains /), wildcards, or a name part."""
+def parse_term(t, path_words=True):
+    """One alternative: ext:, path:, regex:, a path (contains /), wildcards, or a plain word
+    (matched in the whole path with path_words, else in the name only)."""
     low = t.lower()
     if low.startswith('ext:'):
         exts = [e.strip().lstrip('.').lower() for e in re.split(r'[;,]', t[4:]) if e.strip().lstrip('.')]
@@ -979,7 +1053,7 @@ def parse_term(t):
     elif _wild(low):
         return wildcard_term(low)
     else:
-        return NameTerm(low)
+        return WordTerm(low) if path_words else NameTerm(low)
     if _wild(s):
         return PathTerm(s, _compile(fnmatch.translate(s if s.startswith('/') else '*' + s)))
     return PathTerm(s)
@@ -989,7 +1063,7 @@ def split_tokens(q):
     return TOKEN_RE.findall((q or '').strip())
 
 
-def parse_token(tok):
+def parse_token(tok, path_words=True):
     negate = tok.startswith('!') and len(tok) > 1
     if negate:
         tok = tok[1:]
@@ -998,25 +1072,32 @@ def parse_token(tok):
     for p in parts:
         p = p.replace('"', '')
         if p:
-            t = parse_term(p)
+            t = parse_term(p, path_words)
             if t is not None:
                 alts.append(t)
     return Clause(alts, negate) if alts else None
 
 
-def parse_query(q, regex=False):
+def parse_query(q, regex=False, path_words=True):
     """[Clause]; an empty list matches everything. With regex the whole text is one regular
-    expression matched against names."""
+    expression matched against names. With path_words a plain word may match any part of the
+    path; otherwise only the name."""
     q = (q or '').strip()
     if not q:
         return []
     if regex:
         return [Clause([regex_term(q)])]
-    return [c for c in map(parse_token, split_tokens(q)) if c is not None]
+    return [c for c in (parse_token(tok, path_words) for tok in split_tokens(q)) if c is not None]
 
 
 def compile_names(clauses):
     """function(names) -> list of truth values, for clauses whose terms need only the name."""
+    return compile_entries(clauses, False)
+
+
+def compile_entries(clauses, folders=True):
+    """function(names, folders) -> list of truth values, for clauses of name terms and resolved
+    words; folders gives each entry's folder number. With folders=False, function(names)."""
     env = {}
     exprs = []
     k = 0
@@ -1029,15 +1110,19 @@ def compile_names(clauses):
         exprs.append('not (%s)' % e if c.negate else '(%s)' % e)
     cond = ' and '.join(exprs) or 'True'
     args = ''.join(', ' + a for a in sorted(env))
-    fn = eval(compile('lambda L%s: [%s for s in L]' % (args, cond), '<query>', 'eval'),
-              {'__builtins__': {'len': len}})
-    return lambda names: fn(names, **env)
+    if not folders:
+        fn = eval(compile('lambda L%s: [%s for s in L]' % (args, cond), '<query>', 'eval'),
+                  {'__builtins__': {'len': len}})
+        return lambda names: fn(names, **env)
+    fn = eval(compile('lambda L, D%s: [%s for s, d in zip(L, D)]' % (args, cond), '<query>', 'eval'),
+              {'__builtins__': {'len': len, 'zip': zip}})
+    return lambda names, dirs: fn(names, dirs, **env)
 
 
 # ---------------------------------------------------------------- search
 
 SMALL_SORT = 64                 # sort matches by rank when fewer than n / SMALL_SORT
-NARROW_LIMIT = 16               # search within the last result when it has fewer than n / NARROW_LIMIT
+NARROW_LIMIT = 3                # search within the last result when it has fewer than n / NARROW_LIMIT
 
 
 def _consume(it):
@@ -1067,18 +1152,12 @@ def not_mask(n, m):
 
 def clause_mask(base, c):
     n = base.n
-    masks = [t.mask(base) for t in c.alts if t.kind == 'path']
-    names = [t for t in c.alts if t.kind != 'path']
+    masks = [t.mask(base) for t in c.alts if t.kind != 'name']
+    names = [t for t in c.alts if t.kind == 'name']
     if names:
         masks.append(bytes(compile_names([Clause(names)])(base.low)))
     m = masks[0] if len(masks) == 1 else and_masks(n, masks, ors=len(masks))
     return not_mask(n, m) if c.negate else m
-
-
-def _lead(clauses):
-    """The plain positive name word to scan first (the longest), or None."""
-    words = [c for c in clauses if not c.negate and len(c.alts) == 1 and type(c.alts[0]) is NameTerm]
-    return max(words, key=lambda c: len(c.alts[0].s)) if words else None
 
 
 def positions(mask, count=None, n=None):
@@ -1095,33 +1174,54 @@ def positions(mask, count=None, n=None):
     return list(itertools.compress(range(len(mask)), mask))
 
 
+WITHIN_LIMIT = 8                # test the remaining clauses entry by entry below n / WITHIN_LIMIT name matches
+
+
 def match_mask(base, clauses):
     """0/1 mask of the matching entries, or None for all. Name conditions are tested in one
-    pass; when path conditions are present and a plain word keeps few entries, the path
-    conditions are tested on those entries only."""
+    pass; when other conditions are present and the name conditions keep few entries, the others
+    are tested on those entries only. Words found in folder paths are tested together in one
+    pass over names and folder numbers."""
     if not clauses:
         return None
+    clauses = resolve_words(base, clauses)
     n = base.n
-    lead = _lead(clauses) if any(not c.names_only for c in clauses) else None
-    if lead is not None:
-        first = bytes(compile_names([lead])(base.low))
-        k = first.count(1)
-        if k * SMALL_SORT < n:
-            return match_within(base, [c for c in clauses if c is not lead], positions(first, k))
     named = [c for c in clauses if c.names_only]
-    masks = [bytes(compile_names(named)(base.low))] if named else []
-    masks.extend(clause_mask(base, c) for c in clauses if not c.names_only)
-    return masks[0] if len(masks) == 1 else and_masks(base.n, masks)
+    rest = [c for c in clauses if not c.names_only]
+    if named and rest:
+        first = bytes(compile_names(named)(base.low))
+        k = first.count(1)
+        # compiled tests per entry are cheap; path patterns tested one by one are not
+        if k * (WITHIN_LIMIT if all(c.per_entry for c in rest) else SMALL_SORT) < n:
+            return match_within(base, rest, positions(first, k))
+        masks = [first]
+        words = [c for c in rest if c.per_entry]
+    else:
+        masks = []
+        words = [c for c in rest if c.per_entry]
+        if len(clauses) == 1 and words and len(words[0].alts) == 1:
+            return clause_mask(base, words[0])
+        if named:
+            masks.append(bytes(compile_names(named)(base.low)))
+    if words:
+        masks.append(bytes(compile_entries(words)(base.low, base.file_dir)))
+    masks.extend(clause_mask(base, c) for c in rest if not c.per_entry)
+    return masks[0] if len(masks) == 1 else and_masks(n, masks)
 
 
 def match_within(base, clauses, within):
     """Mask of the entries in `within` (entry numbers) that match."""
+    clauses = resolve_words(base, clauses)
     low, ds, fd = base.low, base.dirs_slash, base.file_dir
-    named = [c for c in clauses if c.names_only]
-    other = [c for c in clauses if not c.names_only]
+    simple = [c for c in clauses if c.per_entry]
+    other = [c for c in clauses if not c.per_entry]
     pos = within
-    if named:
-        pos = list(itertools.compress(pos, compile_names(named)(map(low.__getitem__, pos))))
+    if simple:
+        if all(c.names_only for c in simple):
+            keep = compile_names(simple)(map(low.__getitem__, pos))
+        else:
+            keep = compile_entries(simple)(map(low.__getitem__, pos), map(fd.__getitem__, pos))
+        pos = list(itertools.compress(pos, keep))
     if other:
         pos = [i for i in pos if all(c.match(low[i], ds[fd[i]]) for c in other)]
     mask = bytearray(base.n)
@@ -1215,7 +1315,7 @@ def narrows(prev_tokens, tokens):
     if a is None or b is None or a.negate or b.negate or len(a.alts) != 1 or len(b.alts) != 1:
         return False
     ta, tb = a.alts[0], b.alts[0]
-    if type(ta) is NameTerm and type(tb) is NameTerm:
+    if type(ta) is type(tb) and type(ta) in (NameTerm, WordTerm):
         return ta.s in tb.s
     if type(ta) is PathTerm and type(tb) is PathTerm and ta.rx is None and tb.rx is None:
         return ta.s in tb.s
@@ -1555,18 +1655,23 @@ class Index:
 
     # search
 
-    def search(self, query, sort=DEFAULT_SORT, desc=True, regex=False):
+    def search(self, query, sort=DEFAULT_SORT, desc=True, regex=False, path_words=None):
         """Result for query; raises QueryError for a bad pattern. While typing, a query that only
-        narrows the previous one is matched within the previous result when that is small."""
+        narrows the previous one is matched within the previous result when that is small.
+        path_words: plain words also match folder names (None: as the settings say)."""
         if sort not in SORTS:
             sort = DEFAULT_SORT
+        if path_words is None:
+            path_words = self.config.match_path()
         t = time.monotonic()
-        clauses = parse_query(query, regex)
+        clauses = parse_query(query, regex, path_words)
         tokens = [query.strip()] if regex else split_tokens(query)
+        tokens = (bool(path_words), tokens)
         with self.lock:
             base, tomb, extra, gen, last = self.base, self.tomb, self.extra, self.generation, self.last
         if (clauses and not regex and last is not None and last[0] == gen and last[1] is base
-                and last[4] * NARROW_LIMIT < base.n and narrows(last[2], tokens)):
+                and last[4] * NARROW_LIMIT < base.n and last[2][0] == tokens[0]
+                and narrows(last[2][1], tokens[1])):
             mask = match_within(base, clauses, positions(last[3], last[4]))
         else:
             mask = match_mask(base, clauses)

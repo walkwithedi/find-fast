@@ -33,7 +33,9 @@ function startServer(tmp, lang) {
   fs.writeFileSync(path.join(bin, 'xdg-open'), '#!/bin/sh\necho "$1" >> "' + log + '"\n', {mode: 0o755});
   // a stand-in folder chooser that always answers the pics folder
   fs.writeFileSync(path.join(bin, 'zenity'), '#!/bin/sh\necho "' + path.join(root, 'pics') + '"\n', {mode: 0o755});
-  const env = Object.assign({}, process.env, {LANG: lang, LC_ALL: '', LANGUAGE: '', PATH: bin + ':' + process.env.PATH});
+  // no desktop the tool can write shortcuts to: the real desktop settings are never touched
+  const env = Object.assign({}, process.env, {LANG: lang, LC_ALL: '', LANGUAGE: '', PATH: bin + ':' + process.env.PATH,
+                                              XDG_CURRENT_DESKTOP: '', DESKTOP_SESSION: ''});
   const proc = spawn('python3', [path.join(ROOT, 'find_fast.py'), '--web', '--no-browser',
     '--config', path.join(tmp, 'config.json'), '--cache', path.join(tmp, 'index.bin')], {env});
   return new Promise((resolve, reject) => {
@@ -78,6 +80,10 @@ async function rowNames(page) {
     assert.strictEqual(await page.textContent('h1'), '秒搜文件');
     assert.strictEqual(await page.textContent('#quit'), '退出');
     await page.waitForFunction(() => /条目/.test(document.getElementById('index').textContent));
+    // the default global shortcut could not be written (no desktop): said once the page is up
+    await page.waitForFunction(() => /^设置默认唤起快捷键失败：/.test(document.getElementById('status').textContent));
+    assert.strictEqual(await page.getAttribute('#status', 'class'), 'warn');
+    assert.ok(JSON.parse(fs.readFileSync(path.join(tmp, 'config.json'), 'utf8')).toggle_default_done);
     assert.match(await page.textContent('#version'), /^v\d+\.\d+\.\d+$/);
     assert.match(await page.textContent('#rule'), /关闭本页/);
 
@@ -90,6 +96,80 @@ async function rowNames(page) {
     assert.deepStrictEqual(await page.$$eval('#rows tr', trs => trs.map(tr => tr.title)),
       [path.join(srv.root, 'docs', 'Report 2024.pdf'), path.join(srv.root, 'docs', 'report-draft.docx'),
        path.join(srv.root, 'docs', 'old', 'report-2019.pdf')]);
+
+    // words also match folder names; settings can turn that off (no rescan needed)
+    assert.match(await page.textContent('#help'), /所在文件夹的名称/);
+    await page.fill('#q', 'old 2019');
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
+    assert.deepStrictEqual(await rowNames(page), ['report-2019.pdf']);
+    await page.fill('#q', 'docs report');
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setColumns li').length === 4);
+    assert.ok(await page.isChecked('#setMatchPath'));
+    await page.uncheck('#setMatchPath');
+    await page.click('#setSave');
+    await page.waitForFunction(() => !document.getElementById('settings').open);
+    await page.waitForFunction(() => /^0 个结果/.test(document.getElementById('status').textContent));
+    assert.match(await page.textContent('#help'), /只看文件名/);
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(tmp, 'config.json'), 'utf8')).match_path, false);
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open);
+    assert.ok(!(await page.isChecked('#setMatchPath')));
+    await page.click('#setDefaults');
+    assert.ok(await page.isChecked('#setMatchPath'));
+    await page.click('#setCancel');
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open);
+    assert.ok(!(await page.isChecked('#setMatchPath')));
+    await page.check('#setMatchPath');
+    await page.click('#setSave');
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+
+    // column order: drag a header; the locate column stays last; kept after a reload
+    const heads = () => page.$$eval('thead th', ths => ths.map(th => th.dataset.sort || th.id));
+    const cells = () => page.$$eval('#rows tr:first-child td', tds => tds.map(td => td.className));
+    assert.deepStrictEqual(await heads(), ['name', 'path', 'size', 'mtime', 'hLoc']);
+    const nameBox = await page.locator('th[data-sort="name"]').boundingBox();
+    await page.locator('th[data-sort="size"]').dragTo(page.locator('th[data-sort="name"]'),
+      {targetPosition: {x: 5, y: nameBox.height / 2}});
+    await page.waitForFunction(() => document.querySelector('thead th').dataset.sort === 'size');
+    assert.deepStrictEqual(await heads(), ['size', 'name', 'path', 'mtime', 'hLoc']);
+    assert.deepStrictEqual(await cells(), ['size', 'name', 'dir', 'time', 'loc']);
+    const timeBox = await page.locator('th[data-sort="mtime"]').boundingBox();
+    await page.locator('th[data-sort="name"]').dragTo(page.locator('th[data-sort="mtime"]'),
+      {targetPosition: {x: timeBox.width - 5, y: timeBox.height / 2}});
+    await page.waitForFunction(() => document.querySelector('thead th:nth-child(4)').dataset.sort === 'name');
+    assert.deepStrictEqual(await heads(), ['size', 'path', 'mtime', 'name', 'hLoc']);
+    await page.reload();
+    await page.waitForFunction(() => /条目/.test(document.getElementById('index').textContent));
+    assert.deepStrictEqual(await heads(), ['size', 'path', 'mtime', 'name', 'hLoc']);
+    // the same from the keyboard in Settings: move up/down, default order; applied on Save
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setColumns li').length === 4);
+    const setCols = () => page.$$eval('#setColumns li > span:first-child', xs => xs.map(x => x.textContent));
+    assert.deepStrictEqual(await setCols(), ['大小', '路径', '修改时间', '名称']);
+    assert.ok(await page.isDisabled('#setColumns li:first-child button[data-dir="-1"]'));
+    assert.ok(await page.isDisabled('#setColumns li:last-child button[data-dir="1"]'));
+    assert.strictEqual(await page.getAttribute('#setColumns li:last-child button[data-dir="-1"]', 'aria-label'), '上移「名称」');
+    await page.focus('#setColumns li:last-child button[data-dir="-1"]');
+    await page.keyboard.press('Enter');
+    assert.deepStrictEqual(await setCols(), ['大小', '路径', '名称', '修改时间']);
+    assert.strictEqual(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '上移「名称」');
+    await page.click('#colDefaults');
+    assert.deepStrictEqual(await setCols(), ['名称', '路径', '大小', '修改时间']);
+    await page.click('#setColumns li:first-child button[data-dir="1"]');
+    assert.deepStrictEqual(await setCols(), ['路径', '名称', '大小', '修改时间']);
+    await page.click('#setCancel');
+    assert.deepStrictEqual(await heads(), ['size', 'path', 'mtime', 'name', 'hLoc']);
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setColumns li').length === 4);
+    await page.click('#colDefaults');
+    await page.click('#setSave');
+    await page.waitForFunction(() => !document.getElementById('settings').open);
+    assert.deepStrictEqual(await heads(), ['name', 'path', 'size', 'mtime', 'hLoc']);
+    await page.fill('#q', 'report');
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
 
     // keyboard: down, enter opens, ctrl+enter opens the folder, ctrl+c copies
     await page.press('#q', 'ArrowDown');

@@ -87,7 +87,7 @@ class ScanTest(TempTree):
 
     def test_folders_are_entries_with_size_minus_one(self):
         idx = self.index()
-        r = idx.search('pics')
+        r = idx.search('pics', path_words=False)
         self.assertEqual(self.names(r), ['pics'])
         self.assertEqual(r.row(0)[2], -1)
 
@@ -200,8 +200,8 @@ class QueryTest(TempTree):
         super().setUp()
         self.idx = self.index()
 
-    def q(self, query, sort='path', desc=False, regex=False):
-        return self.rel(self.idx.search(query, sort, desc, regex))
+    def q(self, query, sort='path', desc=False, regex=False, path_words=None):
+        return self.rel(self.idx.search(query, sort, desc, regex, path_words))
 
     def test_words_all_match_any_case(self):
         self.assertEqual(self.q('REPORT pdf'), ['docs/Report 2024.pdf', 'docs/old/report-2019.pdf'])
@@ -234,7 +234,7 @@ class QueryTest(TempTree):
     def test_regex(self):
         self.assertEqual(self.q(r'^img_\d+', regex=True), ['pics/IMG_0001.jpg'])
         self.assertEqual(self.q(r'regex:^r.*\d{4}\.pdf$'), ['docs/Report 2024.pdf', 'docs/old/report-2019.pdf'])
-        self.assertEqual(self.q(r'regex:a|b'), self.q('a|b'))
+        self.assertEqual(self.q(r'regex:a|b'), self.q('a|b', path_words=False))
         with self.assertRaises(core.QueryError):
             self.idx.search('regex:(', 'path')
         with self.assertRaises(core.QueryError):
@@ -254,6 +254,38 @@ class QueryTest(TempTree):
         self.assertEqual(self.rel(self.idx.search('ext:txt', 'name', False)), ['A.txt', 'b.txt', 'docs/notes.txt'])
         self.assertEqual(self.rel(self.idx.search('ext:txt', 'name', True)), ['docs/notes.txt', 'b.txt', 'A.txt'])
         self.assertEqual(self.rel(self.idx.search('ext:txt', 'path', True)), ['docs/notes.txt', 'b.txt', 'A.txt'])
+
+    def test_words_match_folder_names(self):
+        self.assertEqual(self.q('pics'), ['pics', 'pics/IMG_0001.jpg', 'pics/项目报告.pptx'])
+        self.assertEqual(self.q('old 2019'), ['docs/old/report-2019.pdf'])
+        self.assertEqual(self.q('docs report !old'), ['docs/Report 2024.pdf', 'docs/report-draft.docx'])
+        self.assertEqual(self.q('pics 报告'), ['pics/项目报告.pptx'])
+        self.assertEqual(sorted(self.q('PICS|old')), ['docs/old', 'docs/old/report-2019.pdf', 'pics',
+                                                       'pics/IMG_0001.jpg', 'pics/项目报告.pptx'])
+        self.assertEqual(self.q('old|*.jpg'), ['docs/old', 'docs/old/report-2019.pdf', 'pics/IMG_0001.jpg'])
+
+    def test_words_exclude_by_path(self):
+        self.assertEqual(self.q('report !docs'), [])
+        self.assertEqual(self.q('ext:pdf !old'), ['docs/Report 2024.pdf'])
+
+    def test_other_terms_stay_name_only(self):
+        self.assertEqual(self.q('*pics*'), ['pics'])
+        self.assertEqual(self.q('pics*'), ['pics'])
+        self.assertEqual(self.q('regex:^pics'), ['pics'])
+        self.assertEqual(self.q('^pics', regex=True), ['pics'])
+        self.assertEqual(self.q('ext:jpg'), ['pics/IMG_0001.jpg'])
+
+    def test_path_words_off(self):
+        self.assertEqual(self.q('pics', path_words=False), ['pics'])
+        self.assertEqual(self.q('old 2019', path_words=False), [])
+        self.config.other['match_path'] = False
+        self.assertEqual(self.q('old 2019'), [])
+        self.config.other['match_path'] = 'bad'
+        self.assertEqual(self.q('old 2019'), ['docs/old/report-2019.pdf'])
+
+    def test_narrowing_keeps_the_mode(self):
+        self.assertEqual(self.q('pics', path_words=False), ['pics'])
+        self.assertEqual(self.q('pics'), ['pics', 'pics/IMG_0001.jpg', 'pics/项目报告.pptx'])
 
     def test_unknown_sort_falls_back(self):
         self.assertEqual(len(self.idx.search('report', 'bogus')), 3)
@@ -289,6 +321,22 @@ class OverlayTest(TempTree):
         os.rename(os.path.join(self.root, 'docs'), os.path.join(self.root, 'papers'))
         idx.apply_changes({self.root})
         self.assertEqual(self.rel(idx.search('2019')), ['papers/old/report-2019.pdf'])
+
+    def test_overlay_words_match_folders_like_base(self):
+        idx = self.index()
+        touch(os.path.join(self.root, 'proj', 'sub', 'plan.md'), b'', 1700000000)
+        os.rename(os.path.join(self.root, 'docs'), os.path.join(self.root, 'papers'))
+        idx.apply_changes({self.root})
+        self.assertTrue(idx.extra)
+        got = {q: self.rel(idx.search(q, 'path', False)) for q in ('proj', 'papers 2019', 'sub md', '!papers report')}
+        self.assertEqual(got['proj'], ['proj', 'proj/sub', 'proj/sub/plan.md'])
+        self.assertEqual(got['papers 2019'], ['papers/old/report-2019.pdf'])
+        self.assertEqual(got['sub md'], ['proj/sub/plan.md'])
+        self.assertEqual(got['!papers report'], [])
+        idx.refresh()
+        self.assertFalse(idx.extra)
+        for q, want in got.items():
+            self.assertEqual(sorted(self.rel(idx.search(q, 'path', False))), sorted(want), q)
 
     def test_changes_outside_roots_ignored(self):
         idx = self.index()

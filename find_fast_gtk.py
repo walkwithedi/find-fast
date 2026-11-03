@@ -27,12 +27,13 @@ import find_fast_core as core
 log = logging.getLogger('find_fast_gtk')
 APP_ID = 'io.github.walkwithedi.findfast'
 RESCAN_EVERY = 300              # seconds between rescans when inotify cannot watch every folder
+NOTICE_SECONDS = 30             # how long a start-up notice stays in the status bar
 CHANGE_THROTTLE = 1.0           # seconds between result refreshes caused by file changes
 WHEEL_ROWS = 3
 
 UI = {
     'zh': {
-        'search': '搜索文件名……（* ? 通配，ext:pdf，path:，!排除，a|b）',
+        'search': '搜索文件名或所在文件夹……（* ? 通配，ext:pdf，path:，!排除，a|b）',
         'col_name': '名称', 'col_path': '路径', 'col_size': '大小', 'col_mtime': '修改时间',
         'open': '打开', 'open_folder': '定位', 'copy_path': '复制路径', 'copy_file': '复制文件', 'rescan': '重新扫描',
         'col_locate': '定位', 'locate_tip': '在文件管理器中打开所在文件夹并选中', 'locate_item': '定位 {name}',
@@ -81,9 +82,19 @@ UI = {
         'copy_command': '复制命令',
         'hotkey_written': '已写入系统快捷键：{key}', 'hotkey_removed': '已删除系统里的唤起快捷键',
         'hotkey_failed': '保存失败：写入系统快捷键时出错（{error}）。请在系统设置的自定义快捷键里手动添加，命令填：{command}',
+        'set_match_path': '搜索词也匹配路径（所在文件夹的名称）',
+        'set_columns': '列顺序', 'col_up': '上移', 'col_down': '下移', 'col_up_item': '上移「{col}」',
+        'col_down_item': '下移「{col}」', 'col_defaults': '恢复默认顺序',
+        'hotkey_default_set': '已设置唤起快捷键 {key}：随时按下即可打开或隐藏窗口，可在「设置」→「快捷键」里修改',
+        'hotkey_default_taken': '设置默认唤起快捷键失败：{key} 已被桌面快捷键「{name}」占用。'
+                                '请在「设置」→「快捷键」→「唤起或隐藏窗口」里换一个组合键。',
+        'hotkey_default_manual': '设置默认唤起快捷键失败：没有找到可写入的桌面快捷键设置。'
+                                 '请在系统设置的自定义快捷键里手动添加，命令填：{command}',
+        'hotkey_default_failed': '设置默认唤起快捷键失败：写入系统快捷键时出错（{error}）。'
+                                 '请在「设置」→「快捷键」→「唤起或隐藏窗口」里重新设置。',
     },
     'en': {
-        'search': 'Search file names... (* ? wildcards, ext:pdf, path:, !not, a|b)',
+        'search': 'Search names and folders... (* ? wildcards, ext:pdf, path:, !not, a|b)',
         'col_name': 'Name', 'col_path': 'Path', 'col_size': 'Size', 'col_mtime': 'Modified',
         'open': 'Open', 'open_folder': 'Locate', 'copy_path': 'Copy path', 'copy_file': 'Copy file', 'rescan': 'Rescan',
         'col_locate': 'Locate', 'locate_tip': 'Open the containing folder in the file manager and select the item',
@@ -139,6 +150,18 @@ UI = {
         'hotkey_written': 'System shortcut saved: {key}', 'hotkey_removed': 'Show-or-hide shortcut removed from the system',
         'hotkey_failed': 'Save failed: the system shortcut could not be written ({error}). Add it by hand as a '
                          'custom shortcut in the system settings, with the command: {command}',
+        'set_match_path': 'Search words also match the path (names of the folders above)',
+        'set_columns': 'Column order', 'col_up': 'Move up', 'col_down': 'Move down', 'col_up_item': 'Move {col} up',
+        'col_down_item': 'Move {col} down', 'col_defaults': 'Default order',
+        'hotkey_default_set': 'Show-or-hide shortcut set to {key}: press it anywhere to open or hide the window; '
+                              'change it under Settings > Shortcuts',
+        'hotkey_default_taken': 'Setting the default show-or-hide shortcut failed: {key} is already a desktop '
+                                'shortcut ({name}). Choose other keys under Settings > Shortcuts > Show or hide.',
+        'hotkey_default_manual': 'Setting the default show-or-hide shortcut failed: no desktop shortcut settings '
+                                 'this tool can write to were found. Add it as a custom shortcut in the system '
+                                 'settings, with the command: {command}',
+        'hotkey_default_failed': 'Setting the default show-or-hide shortcut failed: the system shortcut could not '
+                                 'be written ({error}). Set it again under Settings > Shortcuts > Show or hide.',
     },
 }
 COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime'),
@@ -149,6 +172,7 @@ COPY_FILE_TARGETS = ('x-special/gnome-copied-files', 'text/uri-list', 'UTF8_STRI
 LOCATE_ICONS = ('find-location-symbolic', 'edit-find-symbolic', 'folder-open-symbolic', 'folder')
 UNFOCUSED_OPACITY = 0.7         # window opacity while another program has the focus (needs a compositor)
 COLUMN_WIDTHS = {'name': 300, 'path': 380, 'size': 90, 'mtime': 140, 'locate': 36}
+DATA_COLUMNS = ('name', 'path', 'size', 'mtime')   # default order; the locate column always comes last
 MIN_COLUMN_WIDTH = 24
 DEFAULT_SIZE = (960, 600)
 EXPANDED_MIN = 150              # a smaller window height is not remembered as the unfolded height
@@ -164,6 +188,7 @@ KEY_DEFAULTS = {
     'locate': '<Primary>Return', 'open': '', 'copy_file': '<Primary>c', 'copy_path': '<Primary><Shift>c',
     'settings': '<Primary>comma', 'rescan': 'F5', 'focus': '<Primary>l', 'toggle': '',
 }
+DEFAULT_TOGGLE = '<Primary><Alt>space'     # written into the desktop once when no global shortcut was ever set
 KEY_ORDER = ('toggle', 'locate', 'open', 'copy_file', 'copy_path', 'settings', 'rescan', 'focus')
 LIST_KEYS = ('locate', 'open', 'copy_file', 'copy_path')        # act on the selected row: list focus only
 FIXED_KEYS = {'up', 'down', 'left', 'right', 'return', 'kp_enter', 'escape', 'page_up', 'page_down',
@@ -401,6 +426,75 @@ def toggle_command(here=None, home=None):
     return 'python3 ' + shlex.quote(os.path.join(here, 'find_fast.py')) + ' --toggle', False
 
 
+def valid_order(order):
+    """True for a list holding each data column once."""
+    return (isinstance(order, list) and len(order) == len(DATA_COLUMNS)
+            and all(isinstance(k, str) for k in order) and sorted(order) == sorted(DATA_COLUMNS))
+
+
+def accel_text(accel):
+    """A readable form of an accelerator name without GTK, such as Ctrl+Alt+Space."""
+    c = canonical_accel(accel)
+    if not c:
+        return ''
+    names = {'Primary': 'Ctrl', 'Shift': 'Shift', 'Alt': 'Alt', 'Super': 'Super', 'Meta': 'Meta', 'Hyper': 'Hyper'}
+    mods = [names[m] for m in re.findall(r'<([^>]+)>', c)]
+    key = re.sub(r'<[^>]+>', '', c)
+    return '+'.join(mods + [key[:1].upper() + key[1:]])
+
+
+def ensure_default_toggle(config, hotkey=None, lang=None, refresh=False):
+    """Write the default global shortcut into the desktop once, when it was never set (no
+    "toggle" among the saved shortcuts) and its keys are free. The settings then record that
+    this was done, so a shortcut changed or cleared later is left alone. With refresh, a
+    shortcut already set is written again with the current command (install.sh does this, as the
+    command changes once the tool is installed). Returns (message, kind) or None."""
+    lang = lang or core.ui_language()
+    hotkey = hotkey or DesktopHotkey()
+    command, _ = toggle_command()
+    stored = config.other.get('keys')
+    stored = stored if isinstance(stored, dict) else {}
+    if config.other.get('toggle_default_done') or 'toggle' in stored:
+        accel = stored.get('toggle') if isinstance(stored.get('toggle'), str) else ''
+        if refresh and accel and hotkey.desktop() is not None:
+            try:
+                hotkey.write(accel, command, core.text('app_name', lang))
+            except OSError as e:
+                log.warning('cannot rewrite the system shortcut: %s', e)
+        if not config.other.get('toggle_default_done'):
+            config.other['toggle_default_done'] = True
+            _save_quietly(config)
+        return None
+    key = accel_text(DEFAULT_TOGGLE)
+    if hotkey.desktop() is None:
+        result = (t(lang, 'hotkey_default_manual', command=command), 'warn')
+    else:
+        owner = hotkey.taken(DEFAULT_TOGGLE)
+        if owner:
+            result = (t(lang, 'hotkey_default_taken', key=key, name=owner), 'warn')
+        else:
+            try:
+                hotkey.write(DEFAULT_TOGGLE, command, core.text('app_name', lang))
+            except OSError as e:
+                log.warning('cannot write the system shortcut: %s', e)
+                result = (t(lang, 'hotkey_default_failed', error=e), 'bad')
+            else:
+                keys = dict(stored)
+                keys['toggle'] = DEFAULT_TOGGLE
+                config.other['keys'] = keys
+                result = (t(lang, 'hotkey_default_set', key=key), 'ok')
+    config.other['toggle_default_done'] = True
+    _save_quietly(config)
+    return result
+
+
+def _save_quietly(config):
+    try:
+        config.save()
+    except OSError as e:
+        log.warning('cannot save %s: %s', config.path, e)
+
+
 def load_ui_state(path):
     """Interface state remembered between runs (column widths, window size, position, sort).
     Missing or bad values are left out, so the defaults apply to them."""
@@ -451,6 +545,11 @@ def load_ui_state(path):
                 bad.append('columns.' + str(k))
     elif cols is not None:
         bad.append('columns')
+    if 'order' in data:
+        if valid_order(data['order']):
+            out['order'] = list(data['order'])
+        else:
+            bad.append('order')
     if bad:
         log.warning('%s: ignoring bad values for %s', path, ', '.join(bad))
     return out
@@ -502,8 +601,10 @@ class Window:
     """The search window around an Index. Holds no GTK subclass so it can be built after gi is
     loaded lazily."""
 
-    def __init__(self, app, index, lang=None, state_path=None):
+    def __init__(self, app, index, lang=None, state_path=None, notice=None):
         self.app = app
+        self.notice = notice            # (text, kind) shown once the index is loaded
+        self.pinned = None              # a message kept over searches until the user types or it expires
         self.index = index
         self.lang = lang or core.ui_language()
         # interface state lives beside the settings file
@@ -596,6 +697,7 @@ class Window:
         tv.set_vexpand(True)
         tv.set_hexpand(True)
         self.columns = {}
+        tv.set_column_drag_function(self.column_drop_ok)
         for i, (key, label) in enumerate(COLUMNS):
             col = Gtk.TreeViewColumn(t(self.lang, label))
             col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
@@ -611,10 +713,10 @@ class Window:
                 head.show()
                 col.set_widget(head)
                 col.set_fixed_width(self.column_width(key))
-                tv.append_column(col)
                 self.columns[key] = col
                 continue
             col.set_resizable(True)
+            col.set_reorderable(True)
             col.set_clickable(True)
             col.connect('clicked', self.on_header, key)
             if key == 'name':
@@ -639,8 +741,9 @@ class Window:
             col.set_fixed_width(self.column_width(key))
             if key == 'path':
                 col.set_expand(True)
-            tv.append_column(col)
             self.columns[key] = col
+        for key in list(self.ui_state.get('order', DATA_COLUMNS)) + ['locate']:
+            tv.append_column(self.columns[key])
         tv.connect('scroll-event', self.on_scroll)
         tv.connect('key-press-event', self.on_tree_key)
         tv.connect('button-press-event', self.on_button)
@@ -739,6 +842,18 @@ class Window:
             return False
         self.run_search()
         self.update_state()
+        if self.notice:
+            text, kind = self.notice
+            self.notice = None
+            self.pinned = (text, kind)
+            self.show_message(text, kind, seconds=None)
+            GLib.timeout_add_seconds(NOTICE_SECONDS, self._unpin, text)
+        return False
+
+    def _unpin(self, text):
+        if self.pinned is not None and self.pinned[0] == text:
+            self.pinned = None
+            self._clear_message(text)
         return False
 
     def after_refresh(self, watching):
@@ -994,6 +1109,25 @@ class Window:
     def column_width(self, key):
         return self.ui_state.get('columns', {}).get(key, COLUMN_WIDTHS[key])
 
+    def column_order(self):
+        """The data columns as shown, left to right."""
+        keys = {c: k for k, c in self.columns.items()}
+        return [keys[c] for c in self.tree.get_columns() if keys.get(c) in DATA_COLUMNS]
+
+    def set_column_order(self, order):
+        """Show the data columns in this order, the locate column last."""
+        if not valid_order(list(order)):
+            return
+        prev = None
+        for key in order:
+            self.tree.move_column_after(self.columns[key], prev)
+            prev = self.columns[key]
+
+    def column_drop_ok(self, _tree, column, prev, nxt):
+        """Columns dragged by their headers stay in front of the locate column."""
+        locate = self.columns.get('locate')
+        return column is not locate and prev is not locate and nxt is not None
+
     @staticmethod
     def on_wayland():
         return 'wayland' in type(Gdk.Display.get_default()).__name__.lower()
@@ -1087,7 +1221,8 @@ class Window:
         st = {'width': self.size[0], 'height': self.size[1], 'maximized': self.maximized,
               'sort': self.sort, 'desc': self.desc,
               'columns': {k: (c.get_width() if self.expanded else 0) or c.get_fixed_width()
-                          for k, c in self.columns.items()}}
+                          for k, c in self.columns.items()},
+              'order': self.column_order()}
         if not self.on_wayland() and not self.maximized:
             st['x'], st['y'] = self.win.get_position()
         return st
@@ -1127,6 +1262,7 @@ class Window:
     # ------------------------------------------------------------ search
 
     def on_search_changed(self, *_):
+        self.pinned = None
         self.run_search()
 
     def run_search(self, keep=False):
@@ -1137,7 +1273,7 @@ class Window:
         self.searches += 1
         try:
             self.result = self.index.search(self.query, self.sort, self.desc)
-            self.message = None
+            self.message = self.pinned
         except core.QueryError as e:
             self.result = None
             self.message = (str(e), 'warn')
@@ -1637,6 +1773,7 @@ class SettingsDialog:
         self.exclude = list(config.exclude)
         self.keys = load_keys(config)
         self.saved_toggle = self.keys['toggle']
+        self.order = window.column_order()
         self.recording = None           # action whose shortcut is being recorded
         lang = self.lang
         d = self.dialog = Gtk.Dialog(title=t(lang, 'settings'), transient_for=window.win, modal=True,
@@ -1686,6 +1823,20 @@ class SettingsDialog:
         self.hidden = Gtk.CheckButton(label=t(lang, 'set_hidden'))
         self.hidden.set_active(config.hidden)
         area.pack_start(self.hidden, False, False, 0)
+        self.match_path = Gtk.CheckButton(label=t(lang, 'set_match_path'))
+        self.match_path.set_active(config.match_path())
+        area.pack_start(self.match_path, False, False, 0)
+
+        area.pack_start(self.heading(t(lang, 'set_columns')), False, False, 0)
+        self.columns_box = self.list_box()
+        frame = Gtk.Frame()
+        frame.add(self.columns_box)
+        area.pack_start(frame, False, False, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        b = Gtk.Button(label=t(lang, 'col_defaults'))
+        b.connect('clicked', lambda *_: self.reset_columns())
+        row.pack_start(b, False, False, 0)
+        area.pack_start(row, False, False, 0)
 
         area.pack_start(self.heading(t(lang, 'keys')), False, False, 0)
         grid = Gtk.Grid(column_spacing=8, row_spacing=4)
@@ -1721,6 +1872,7 @@ class SettingsDialog:
         self.problems.set_selectable(True)
         area.pack_start(self.problems, False, False, 0)
         self.refill()
+        self.refill_columns()
         self.refill_keys()
 
     @staticmethod
@@ -1806,11 +1958,57 @@ class SettingsDialog:
     def restore_defaults(self):
         self.roots, self.exclude = list(core.DEFAULT_ROOTS), list(core.DEFAULT_EXCLUDE)
         self.hidden.set_active(False)
-        self.keys = dict(KEY_DEFAULTS)
+        self.match_path.set_active(True)
+        self.order = list(DATA_COLUMNS)
+        self.keys = dict(KEY_DEFAULTS, toggle=DEFAULT_TOGGLE)
         self.recording = None
         self.refill()
+        self.refill_columns()
         self.refill_keys()
         self.update_problems([])
+
+    def reset_columns(self):
+        self.order = list(DATA_COLUMNS)
+        self.refill_columns()
+
+    # column order
+
+    def refill_columns(self):
+        box = self.columns_box
+        for child in box.get_children():
+            box.remove(child)
+        last = len(self.order) - 1
+        for i, key in enumerate(self.order):
+            name = t(self.lang, 'col_' + key)
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            row.set_margin_start(6)
+            row.set_margin_end(2)
+            row.pack_start(Gtk.Label(label=name, xalign=0), True, True, 0)
+            for label, item, step, ok in (('col_up', 'col_up_item', -1, i > 0),
+                                          ('col_down', 'col_down_item', 1, i < last)):
+                b = Gtk.Button(label=t(self.lang, label))
+                b.set_relief(Gtk.ReliefStyle.NONE)
+                b.set_sensitive(ok)
+                b.get_accessible().set_name(t(self.lang, item, col=name))
+                b.connect('clicked', lambda _b, k=i, d=step: self.move_column(k, d))
+                row.pack_start(b, False, False, 0)
+            box.add(row)
+        box.show_all()
+
+    def move_column(self, k, step):
+        j = k + step
+        if 0 <= k < len(self.order) and 0 <= j < len(self.order):
+            self.order[k], self.order[j] = self.order[j], self.order[k]
+            self.refill_columns()
+            # keep the keyboard on the moved column's button in its new row
+            row = self.columns_box.get_row_at_index(j)
+            if row is not None:
+                buttons = [w for w in row.get_child().get_children() if isinstance(w, Gtk.Button)]
+                target = buttons[0] if step < 0 else buttons[1]
+                if not target.get_sensitive():
+                    target = buttons[1] if step < 0 else buttons[0]
+                target.grab_focus()
+
 
     # shortcuts
 
@@ -1934,11 +2132,15 @@ class SettingsDialog:
             return 'warn'
         new = self.config.with_scope(roots, exclude, self.hidden.get_active())
         new.other['keys'] = {k: v for k, v in self.keys.items() if v != KEY_DEFAULTS[k] or k == 'toggle'}
+        new.other['match_path'] = self.match_path.get_active()
         same_scope = (new.resolved_roots() == self.config.resolved_roots() and new.exclude == self.config.exclude
                       and new.hidden == self.config.hidden)
         ok = self.window.save_config(new) if same_scope else self.window.apply_scope(new)
         if not ok:
             return 'blocked'
+        self.window.set_column_order(self.order)
+        if same_scope and new.match_path() != self.config.match_path():
+            self.window.run_search(keep=True)
         self.window.apply_keys(self.keys)
         if toggle != self.saved_toggle:
             self.window.write_hotkey(toggle)
@@ -1956,8 +2158,9 @@ class SettingsDialog:
             dialog.destroy()
 
 
-def build_app(index, lang=None):
-    """A Gtk.Application with one window; a second start activates the first one."""
+def build_app(index, lang=None, notice=None):
+    """A Gtk.Application with one window; a second start activates the first one. notice: a
+    dict whose "notice" (message, kind), when set by the time the window opens, is shown once."""
     app = Gtk.Application(application_id=APP_ID, flags=Gio.ApplicationFlags.FLAGS_NONE)
     holder = {}
 
@@ -1965,7 +2168,7 @@ def build_app(index, lang=None):
         if 'win' in holder:
             holder['win'].win.present()
             return
-        w = holder['win'] = Window(a, index, lang)
+        w = holder['win'] = Window(a, index, lang, notice=(notice or {}).get('notice'))
         w.start()
 
     def toggle(_action, _param):
@@ -1988,7 +2191,8 @@ def main(args=None):
         return 1
     config = core.Config(getattr(args, 'config', core.CONFIG_FILE))
     index = core.Index(config, getattr(args, 'cache', core.CACHE_FILE))
-    app = build_app(index)
+    holder = {}
+    app = build_app(index, notice=holder)
     if getattr(args, 'toggle', False):
         # a running window is shown or hidden by the first instance; otherwise start as usual
         app.register(None)
@@ -1998,6 +2202,7 @@ def main(args=None):
             if conn is not None:
                 conn.flush_sync(None)
             return 0
+    holder['notice'] = ensure_default_toggle(config)
     return app.run(sys.argv[:1])
 
 

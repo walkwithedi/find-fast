@@ -161,12 +161,30 @@ class WebTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.tmp, 'config.json')))
         body['force'] = True
         code, j = self.req('POST', '/api/settings', body)
-        self.assertEqual((code, j), (200, {'saved': True}))
+        self.assertEqual((code, j), (200, {'saved': True, 'rescan': True}))
         self.wait_ready()
         self.assertEqual(core.Config(os.path.join(self.tmp, 'config.json')).roots, [self.root, missing])
         code, j = self.search('IMG')
         self.assertEqual(j['count'], 0)
         self.assertEqual(self.req('POST', '/api/settings', {'roots': 'x'})[0], 400)
+
+    def test_match_path_saved_without_rescan(self):
+        code, j = self.req('GET', '/api/settings')
+        self.assertEqual((j['match_path'], j['defaults']['match_path']), (True, True))
+        self.assertTrue(self.req('GET', '/api/status')[1]['match_path'])
+        self.assertEqual(self.search('old 2019')[1]['count'], 1)
+        body = {'roots': j['roots'], 'exclude': j['exclude'], 'hidden': j['hidden'], 'match_path': False}
+        code, out = self.req('POST', '/api/settings', body)
+        self.assertEqual((code, out), (200, {'saved': True, 'rescan': False}))
+        self.assertFalse(self.st.is_applying())
+        self.assertFalse(self.req('GET', '/api/status')[1]['match_path'])
+        self.assertEqual(self.search('old 2019')[1]['count'], 0)
+        self.assertFalse(core.Config(os.path.join(self.tmp, 'config.json')).match_path())
+
+    def test_notice_in_status(self):
+        self.assertNotIn('notice', self.req('GET', '/api/status')[1])
+        self.st.notice = ('note', 'warn')
+        self.assertEqual(self.req('GET', '/api/status')[1]['notice'], {'text': 'note', 'kind': 'warn'})
 
     def test_exclude_row(self):
         code, j = self.search('report-2019')
