@@ -45,6 +45,8 @@ UI = {
         'open_failed': '打开失败：{error}。请检查文件是否还在，或用文件管理器打开。',
         'gone': '打开失败：文件已不存在。索引将在下次扫描时更新。',
         'unreadable': '{count} 个文件夹无法读取',
+        'no_match': '没有找到', 'hint_entries': '共 {count} 项', 'hint_scanning': '索引中 {pct}%',
+        'hint_first': '索引中，已有 {count} 项',
         'ver_newest': '最新', 'ver_older': '有更新版', 'jump_newest': '跳到最新版',
         'ver_tip': '同组共 {count} 个类似版本，最新：{path}',
         'ver_skipped': '结果过多，未标出类似版本',
@@ -81,6 +83,8 @@ UI = {
         'open_failed': 'Open failed: {error}. Check that the file still exists, or open it from a file manager.',
         'gone': 'Open failed: the file no longer exists. The index is updated at the next scan.',
         'unreadable': '{count} folders unreadable',
+        'no_match': 'No matches', 'hint_entries': '{count} items', 'hint_scanning': 'Indexing {pct}%',
+        'hint_first': 'Indexing, {count} items so far',
         'ver_newest': 'Newest', 'ver_older': 'Newer exists', 'jump_newest': 'Go to the newest version',
         'ver_tip': '{count} similar versions; newest: {path}',
         'ver_skipped': 'Too many results to mark similar versions',
@@ -109,6 +113,7 @@ UNFOCUSED_OPACITY = 0.7         # window opacity while another program has the f
 COLUMN_WIDTHS = {'name': 300, 'path': 380, 'size': 90, 'mtime': 140, 'locate': 36}
 MIN_COLUMN_WIDTH = 24
 DEFAULT_SIZE = (960, 600)
+EXPANDED_MIN = 150              # a smaller window height is not remembered as the unfolded height
 
 
 def load_ui_state(path):
@@ -136,7 +141,7 @@ def load_ui_state(path):
         else:
             bad.append(key)
 
-    for key in ('width', 'height', 'expanded_height'):
+    for key in ('width', 'height'):
         num(key, 100, 20000)
     for key in ('x', 'y'):
         num(key, -100000, 100000)
@@ -267,7 +272,18 @@ class Window:
         self.entry.connect('search-changed', self.on_search_changed)
         self.entry.connect('key-press-event', self.on_entry_key)
         self.entry.connect('activate', lambda *_: self.open_current())
-        top.pack_start(self.entry, True, True, 0)
+        # while the list is folded away, the index state shows at the right end of the search box
+        over = Gtk.Overlay()
+        over.add(self.entry)
+        self.hint = Gtk.Label(xalign=1)
+        self.hint.get_style_context().add_class('dim-label')
+        self.hint.set_halign(Gtk.Align.END)
+        self.hint.set_valign(Gtk.Align.CENTER)
+        self.hint.set_margin_end(30)
+        self.hint.set_no_show_all(True)
+        over.add_overlay(self.hint)
+        over.set_overlay_pass_through(self.hint, True)
+        top.pack_start(over, True, True, 0)
         self.gear = Gtk.Button.new_from_icon_name('preferences-system-symbolic', Gtk.IconSize.BUTTON)
         self.gear.set_relief(Gtk.ReliefStyle.NONE)
         self.gear.set_tooltip_text(t(self.lang, 'settings'))
@@ -277,7 +293,7 @@ class Window:
         box.pack_start(top, False, False, 0)
         self.settings = None            # the open settings dialog
 
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        row = self.list_area = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(row, True, True, 0)
 
         # icon name, name, folder, size, time, tooltip (Pango markup), similar-version tag
@@ -355,7 +371,16 @@ class Window:
         self.sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.EXTERNAL)
         self.sw.add(tv)
         self.sw.connect('size-allocate', self.on_area_allocate)
-        row.pack_start(self.sw, True, True, 0)
+        over = Gtk.Overlay()
+        over.add(self.sw)
+        self.empty = Gtk.Label(label=t(self.lang, 'no_match'))
+        self.empty.get_style_context().add_class('dim-label')
+        self.empty.set_halign(Gtk.Align.CENTER)
+        self.empty.set_valign(Gtk.Align.CENTER)
+        self.empty.set_no_show_all(True)
+        over.add_overlay(self.empty)
+        over.set_overlay_pass_through(self.empty, True)
+        row.pack_start(over, True, True, 0)
         row.pack_start(self.scrollbar, False, False, 0)
 
         bar = self.bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
@@ -404,6 +429,8 @@ class Window:
         accel.connect(k, mods, 0, lambda *_: (self.open_settings(), True)[1])
         self.update_sort_indicators()
         w.show_all()
+        self.expanded = None
+        self.apply_layout()
         self.entry.grab_focus()
 
     # ------------------------------------------------------------ index lifecycle
@@ -628,23 +655,85 @@ class Window:
         return False
 
     def on_configure(self, win, _event):
-        if not self.maximized:
-            self.size = tuple(win.get_size())
+        if self.maximized:
+            return False
+        width, height = win.get_size()
+        # the folded height is never remembered; only the height with the list shown
+        if self.expanded and height >= EXPANDED_MIN:
+            self.size = (width, height)
+        else:
+            self.size = (width, self.size[1])
         return False
 
     def on_window_state(self, _win, event):
-        self.maximized = bool(event.new_window_state & Gdk.WindowState.MAXIMIZED)
+        maximized = bool(event.new_window_state & Gdk.WindowState.MAXIMIZED)
+        if maximized != self.maximized:
+            self.maximized = maximized
+            GLib.idle_add(lambda: (self.closed or self.apply_layout(), False)[1])
         return False
+
+    # ------------------------------------------------------------ folding the list
+
+    def want_expanded(self):
+        """The list shows while there is search text, and always in a maximised window."""
+        return bool(self.entry.get_text()) or self.maximized
+
+    def apply_layout(self):
+        """Fold the result list and status bar away under an empty search box, or unfold them
+        to the remembered height; the window keeps its width and place."""
+        want = self.want_expanded()
+        if want != self.expanded:
+            if self.expanded:
+                for c in self.columns.values():     # keep widths dragged by hand
+                    if c.get_width() > 0:
+                        c.set_fixed_width(c.get_width())
+            self.expanded = want
+            self.list_area.set_visible(want)
+            self.bar.set_visible(want)
+            self.hint.set_visible(not want)
+            if not self.maximized:
+                self.win.resize(self.size[0], self.size[1] if want else 1)
+        self.empty.set_visible(want and self.result is not None and self.count() == 0 and self.message is None
+                               and bool(self.query))
+        self.update_hint()
+
+    def update_hint(self):
+        """The text at the right of the search box while folded: a message for a few seconds,
+        else the index state; its tooltip has the whole state with the version."""
+        if self.expanded:
+            self.entry.set_tooltip_text(None)
+            return
+        ctx = self.hint.get_style_context()
+        for c in ('error', 'warning'):
+            ctx.remove_class(c)
+        if self.message is not None:
+            text, kind = self.message
+            if kind in ('bad', 'warn'):
+                ctx.add_class('error' if kind == 'bad' else 'warning')
+        else:
+            text = self.hint_state()
+        self.hint.set_text(text)
+        self.entry.set_tooltip_text(self.state.get_text() or None)
+
+    def hint_state(self):
+        st = self.index.status()
+        if st['state'] == 'scanning':
+            dirs, files = st['progress']
+            known = len(self.index.base.dirs)
+            if known:
+                return t(self.lang, 'hint_scanning', pct=min(99, dirs * 100 // known))
+            return t(self.lang, 'hint_first', count='{:,}'.format(files))
+        if st['state'] == 'empty':
+            return t(self.lang, 'loading')
+        return t(self.lang, 'hint_entries', count='{:,}'.format(st['entries']))
 
     def ui_state_now(self):
         st = {'width': self.size[0], 'height': self.size[1], 'maximized': self.maximized,
               'sort': self.sort, 'desc': self.desc,
-              'columns': {k: c.get_width() or c.get_fixed_width() for k, c in self.columns.items()}}
+              'columns': {k: (c.get_width() if self.expanded else 0) or c.get_fixed_width()
+                          for k, c in self.columns.items()}}
         if not self.on_wayland() and not self.maximized:
             st['x'], st['y'] = self.win.get_position()
-        for key in ('expanded_height',):
-            if key in self.ui_state:
-                st[key] = self.ui_state[key]
         return st
 
     def save_ui_state(self):
@@ -1134,6 +1223,8 @@ class Window:
         return False
 
     def update_status(self):
+        if getattr(self, 'expanded', None) is not None:
+            self.apply_layout()
         if self.message is not None:
             text, kind = self.message
             self.status.set_text(text)
@@ -1169,6 +1260,8 @@ class Window:
         parts.append(core.text('watch_' + st['watch'], self.lang))
         parts.append('v' + core.VERSION)
         self.set_state(' · '.join(parts))
+        if getattr(self, 'expanded', None) is not None:
+            self.update_hint()
         return False
 
 

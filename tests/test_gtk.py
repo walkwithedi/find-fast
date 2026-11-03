@@ -370,6 +370,7 @@ class GtkTest(unittest.TestCase):
         w = self.window()
         state = os.path.join(self.tmp, 'ui-state.json')
         self.assertEqual(w.state_path, state)
+        self.type('report')                 # the list shows, so the height counts
         w.columns['name'].set_fixed_width(222)
         w.win.resize(700, 420)
         pump(0.3)
@@ -459,6 +460,65 @@ class GtkTest(unittest.TestCase):
         ref.destroy()
         self.assertGreater(w.row_height, 0)
         self.assertLess(w.row_height, default)
+
+    def height(self):
+        pump(0.3)
+        return self.w.win.get_size()[1]
+
+    def test_list_folds_under_an_empty_search_box(self):
+        w = self.window()
+        Gdk = ui.Gdk
+        self.assertFalse(w.expanded)
+        self.assertFalse(w.list_area.get_visible())
+        self.assertFalse(w.bar.get_visible())
+        self.assertTrue(w.hint.get_visible())
+        self.assertLess(self.height(), 120)
+        self.assertEqual(w.hint.get_text(), '11 items')
+        self.assertIn('v' + core.VERSION, w.entry.get_tooltip_text())
+        # typing unfolds to the remembered height; no match still unfolds and says so
+        self.type('report')
+        self.assertTrue(w.expanded and w.list_area.get_visible() and w.bar.get_visible())
+        self.assertGreater(self.height(), 500)
+        self.assertFalse(w.empty.get_visible())
+        w.win.resize(800, 450)
+        self.assertEqual(self.height(), 450)
+        self.type('nothing-like-this')
+        self.assertTrue(w.expanded)
+        self.assertTrue(w.empty.get_visible())
+        self.assertEqual(w.empty.get_text(), 'No matches')
+        # Escape: clear and fold, then close; the folded height is not remembered
+        w.on_entry_key(w.entry, key(Gdk.KEY_Escape))
+        self.assertTrue(pump(until=lambda: w.expanded is False))
+        self.assertLess(self.height(), 120)
+        self.assertFalse(self.quit_called)
+        self.type('report')
+        self.assertEqual(self.height(), 450)
+        self.type('')
+        pump(0.2)
+        w.on_entry_key(w.entry, key(Gdk.KEY_Escape))
+        self.assertTrue(pump(until=lambda: self.quit_called))
+        import json
+        with open(w.state_path, encoding='utf-8') as f:
+            self.assertEqual(json.load(f)['height'], 450)
+
+    def test_messages_show_in_the_folded_box(self):
+        w = self.window()
+        self.assertFalse(w.expanded)
+        w.show_message('Something failed: reason.', 'bad', seconds=1)
+        self.assertEqual(w.hint.get_text(), 'Something failed: reason.')
+        self.assertTrue(w.hint.get_style_context().has_class('error'))
+        self.assertTrue(pump(until=lambda: w.hint.get_text() == '11 items'))
+        self.assertFalse(w.hint.get_style_context().has_class('error'))
+
+    def test_maximised_window_does_not_fold(self):
+        w = self.window()
+        w.maximized = True
+        w.apply_layout()
+        self.assertTrue(w.expanded)
+        self.assertTrue(w.list_area.get_visible())
+        w.maximized = False
+        w.apply_layout()
+        self.assertFalse(w.expanded)
 
     def test_open_missing_file(self):
         w = self.window()

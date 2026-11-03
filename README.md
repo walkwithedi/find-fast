@@ -72,10 +72,11 @@ Folders appear in the results as well.
 - Similar versions: several versions of one file (copies, copies saved with a date or version number, drafts and finals) form a group; the newest by modification time is tagged Newest before its name and the others Newer exists. Results are shown as usual, not folded. Hovering adds a line with the group size and the newest one; right-click a Newer exists row for Go to the newest version. The rules are under "Similar versions" below.
 - The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
-- F5 or Ctrl+R rescans; Esc clears the box, and a second Esc closes the window.
+- F5 or Ctrl+R rescans; Esc clears the box (which folds the list), and a second Esc closes the window.
 - While another program has the focus the window is 70 % opaque, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
 - Column widths, window size, maximised state, position and sort are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults; a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
-- The status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
+- With an empty search box only the search row shows and the window gets shorter where it is; the first character typed unfolds the result list to the height it last had unfolded, also when nothing matches (it then says No matches). Clearing the box, or Esc, folds it again. A maximised window does not fold. While folded, the right end of the search box shows "N items" or "Indexing 42%", and messages such as copy results or errors for a few seconds; hovering the box shows the full index state and the version.
+- While the list shows, the status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
 
 ### Similar versions
 
@@ -155,7 +156,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
-- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused.
+- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused; the list folds away under an empty search box.
 - 0.1.0: first version.
 
 ## Licence
