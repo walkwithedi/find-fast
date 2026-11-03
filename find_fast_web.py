@@ -390,6 +390,7 @@ class Handler(BaseHTTPRequestHandler):
             ok = isinstance(token, str) and hmac.compare_digest(token, st.token)
         if not ok:
             log.warning('rejected %s %s', self.command, urllib.parse.urlsplit(self.path).path)
+            self.close_connection = True    # a request body is not read; the connection cannot be reused
             self.send_json(403, {'error': msg('denied')})
         return ok
 
