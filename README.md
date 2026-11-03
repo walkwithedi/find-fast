@@ -33,26 +33,28 @@ Type part of a name and every matching file under your home folder and local dis
 
 Download `find-fast-v<version>.zip` from Releases, unpack it and double-click `双击运行.desktop`, or run `python3 find_fast.py`. A link to the launcher can go on the desktop; a copy cannot, since it must find the program next to it.
 
-For a menu entry and a hotkey, run `bash install.sh` once. It copies the tool to `~/.local/share/find-fast` and creates the command `~/.local/bin/find-fast` and a menu entry; no root needed. `bash install.sh --uninstall` removes them and keeps the settings and the index.
+For a menu entry, run `bash install.sh` once. It copies the tool to `~/.local/share/find-fast`, creates the command `~/.local/bin/find-fast` and a menu entry, and writes the default show-or-hide shortcut Ctrl+Alt+Space (see Global hotkey); no root needed. `bash install.sh --uninstall` removes them and keeps the settings and the index.
 
 The first start builds the index, with progress in the status bar; what has been scanned can be searched meanwhile. Later starts load the previous index and relist only folders that changed.
 
 ### Global hotkey
 
-Set it in the window under Settings → Shortcuts → Show or hide the window: click the button and press the keys. On saving it is written into the desktop's own custom shortcuts (Kylin UKUI or GNOME, through gsettings) and shows in the system settings; it runs `find-fast --toggle`, which hides the window when it is in front and otherwise brings it forward with the search text selected (starting it when it is not running). A hidden window keeps the index up to date; closing the window or a second Esc on an empty box quits. A combination the desktop already uses is named first, with Save anyway. Clearing it, or `bash install.sh --uninstall`, removes only the entry this tool wrote.
+The default is Ctrl+Alt+Space. `install.sh` writes it, so it opens the window before the tool was ever started; when the tool runs from an unpacked folder without installing, the first start writes it. It is written only when no shortcut was ever set: one changed or cleared later is left alone. When the desktop already uses Ctrl+Alt+Space, the desktop is not recognised, or writing fails, nothing is written, and the installer output and the status bar (the status line on the browser page) say why; set one in Settings then.
+
+Change it in the window under Settings → Shortcuts → Show or hide the window: click the button and press the keys. On saving it is written into the desktop's own custom shortcuts (Kylin UKUI or GNOME, through gsettings) and shows in the system settings; it runs `find-fast --toggle`, which hides the window when it is in front and otherwise brings it forward with the search text selected (starting it when it is not running). A hidden window keeps the index up to date; closing the window or a second Esc on an empty box quits. A combination the desktop already uses is named first, with Save anyway. Clearing it, or `bash install.sh --uninstall`, removes only the entry this tool wrote.
 
 Without `install.sh` the shortcut points at the unpacked folder (`python3 <tool folder>/find_fast.py --toggle`) and must be set again after the folder moves. On other desktops, or without gsettings, nothing is written: the settings show the command, with Copy command, to add by hand:
 
 - GNOME (Ubuntu): Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts → add, with `/home/<user>/.local/bin/find-fast --toggle` as the command.
 - Kylin (UKUI): Settings → Devices → Shortcuts → Custom Shortcuts → add, with the same command.
 
-The window's own shortcuts are under the same Settings section: Locate, Open the selected item (Enter always opens), Copy file, Copy path, Open settings, Rescan and Go to the search box. Arrows, Enter and Esc stay fixed and cannot be recorded; a shortcut needs Ctrl, Alt or Super, or is F1 to F12; two actions on the same keys cannot be saved. Changes apply at once and do not rebuild the index; Restore defaults puts back the defaults below.
+The window's own shortcuts are under the same Settings section: Locate, Open the selected item (Enter always opens), Copy file, Copy path, Open settings, Rescan and Go to the search box. Arrows, Enter and Esc stay fixed and cannot be recorded; a shortcut needs Ctrl, Alt or Super, or is F1 to F12; two actions on the same keys cannot be saved. Changes apply at once and do not rebuild the index; Restore defaults puts back the defaults below, and Ctrl+Alt+Space for show or hide.
 
 ### Query syntax
 
 | Query | Matches |
 | --- | --- |
-| `report 2024` | names containing all the words (any case) |
+| `report 2024` | paths containing all the words (any case): each word in the name or in the name of any folder above it |
 | `pdf\|docx` | either word |
 | `!draft` | not containing the word |
 | `*.pdf`, `img_??.png` | wildcards, matched against the whole name |
@@ -63,6 +65,8 @@ The window's own shortcuts are under the same Settings section: Locate, Open the
 
 Folders appear in the results as well.
 
+Plain words match the whole path: `atlas 28` finds `~/Documents/Atlas/report 28.pdf`, and `!draft` leaves out entries with draft anywhere in their path. The path includes the indexed folder itself (such as the home folder `/home/<user>`), so a word from those folder names matches everything under them. Wildcards, `ext:`, `regex:` and the regular-expression mode still look at the name only. To search names only, turn off Search words also match the path in Settings.
+
 ### Window
 
 - Type to search; ↓ moves into the list and ↑ on the first row back to the box; typing in the list continues in the box.
@@ -71,13 +75,14 @@ Folders appear in the results as well.
 - Copy file puts the file or folder itself on the clipboard: pasting in a file manager gives the item, pasting in other programs its path. Only the window has it; the browser page's clipboard holds text only, so there Ctrl+C still copies the path.
 - Right click or the Menu key (Shift+F10): locate, open, copy file, copy path; after a separator Go to the newest version (on Newer exists rows), Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first and names the folder; the item is not shown when that folder is an indexed folder itself.
 - Click a column header to sort by name, path, size or modification time; click again to reverse. Newest first by default.
+- Drag a column header to move the name, path, size and modified columns; the locate column stays last. Settings → Column order does the same with Move up and Move down; Default order puts back name, path, size, modified.
 - Hovering a result row shows its full path.
 - Similar versions: several versions of one file (copies, copies saved with a date or version number, drafts and finals) form a group; the newest by modification time is tagged Newest before its name and the others Newer exists. Results are shown as usual, not folded. Hovering adds a line with the group size and the newest one; right-click a Newer exists row for Go to the newest version. The rules are under "Similar versions" below.
 - The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
 - F5 rescans; Ctrl+, opens Settings; Ctrl+L goes to the search box; Esc clears the box (which folds the list), and a second Esc closes the window.
 - While another program has the focus the window is 70 % opaque, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
-- Column widths, window size, maximised state, position and sort are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults; a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
+- Column widths, column order, window size, maximised state, position and sort are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults (a column order with a missing, extra or unknown column gives the default order); a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
 - With an empty search box only the search row shows and the window gets shorter where it is; the first character typed unfolds the result list to the height it last had unfolded, also when nothing matches (it then says No matches). Clearing the box, or Esc, folds it again. A maximised window does not fold. While folded, the right end of the search box shows "N items" or "Indexing 42%", and messages such as copy results or errors for a few seconds; hovering the box shows the full index state and the version.
 - While the list shows, the status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
 
@@ -95,7 +100,7 @@ A remainder shorter than 2 characters is not grouped. The newest in a group is t
 
 ### Browser page
 
-Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next; hovering a row shows its full path), open, locate (also a button at the end of every row), copy path, rescan, settings (the gear button), a context menu with exclusion, and quit. On the page, Add folder... opens zenity's folder chooser; without zenity the path is typed instead.
+Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next; hovering a row shows its full path; columns reordered by dragging their headers or in Settings, the order kept in that browser), open, locate (also a button at the end of every row), copy path, rescan, settings (the gear button), a context menu with exclusion, and quit. On the page, Add folder... opens zenity's folder chooser; without zenity the path is typed instead.
 
 The server listens on a random port of 127.0.0.1 only, and its address carries a token made at start. It exits a few seconds after the last page closes (a reload does not count), at once on Quit, and after 120 seconds when no page ever opened; a page left in a background tab does not count as closed. `--no-browser` only prints the address.
 
@@ -125,6 +130,8 @@ The gear button beside the search box (or Ctrl+, in the window) opens Settings:
 - Indexed folders: remove any; Add folder... picks one in the system folder chooser.
 - Excluded: remove any; Add folder... excludes a chosen folder by path, or type a name rule (such as `node_modules` or `*.tmp`) and choose Add.
 - Index hidden files and folders: a switch.
+- Search words also match the path: on by default, plain words are looked for in names and in the names of the folders above; off, in names only. Changing it does not rescan.
+- Column order: Move up, Move down and Default order; applied on Save.
 - Restore defaults puts the default values in the panel; nothing is written until Save.
 
 Saving checks first: an empty folder list cannot be saved; a folder that does not exist, one on a network mount, one inside another indexed folder, or an exclusion outside every indexed folder is listed with the reason, and Save anyway saves regardless. The same folder written two ways counts once, and folders under home are written as `~/...`.
@@ -137,13 +144,16 @@ Settings live in `~/.config/find-fast/config.json`, which can also be edited by 
 {
   "roots": ["~", "/media", "/mnt"],
   "exclude": ["node_modules", "__pycache__", "lost+found", "$RECYCLE.BIN", "System Volume Information"],
-  "hidden": false
+  "hidden": false,
+  "match_path": true
 }
 ```
 
 - `roots`: folders to index (`~` allowed); a root inside another one is ignored.
 - `exclude`: entries without `/` exclude by name (wildcards `*` `?` allowed); entries with `/` or starting with `~` exclude a whole folder by path.
 - `hidden`: also index names that start with a dot.
+- `match_path`: plain search words also match folder names in the path; `true` by default.
+- `keys`, `toggle_default_done`: the shortcuts, and whether the default show-or-hide shortcut was dealt with; written by Settings.
 
 After the file is edited by hand, the next start rescans everything.
 
@@ -151,7 +161,7 @@ The index is `~/.cache/find-fast/index.bin`, mode 600. Sizes and times are updat
 
 ## Performance
 
-On GitHub's Ubuntu runners, with a million fictional entries from `scripts/bench.py`: about 0.3 s from start to a searchable index and about 250 MB peak memory; plain words and typing take 15 to 60 ms per search; wildcard, extension, path and regular-expression queries, which test each entry more than once, take 60 to 130 ms depending on the machine.
+On GitHub's Ubuntu runners, with a million fictional entries from `scripts/bench.py`: about 0.3 s from start to a searchable index and about 250 MB peak memory; plain words and typing take 15 to 60 ms per search, and about 60 to 120 ms when the words also appear in many folder names and the results multiply (the benchmark draws folder and file names from the same words, the least favourable case); wildcard, extension, path and regular-expression queries, which test each entry more than once, take 60 to 130 ms depending on the machine.
 
 ## Privacy
 
@@ -161,6 +171,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
+- 0.3.0: search words also match folder names in the path (can be turned off in Settings); result columns can be reordered by dragging or in Settings; default show-or-hide shortcut Ctrl+Alt+Space, written on install.
 - 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused; the list folds away under an empty search box; shortcuts can be changed and a global show-or-hide shortcut set.
 - 0.1.0: first version.
 

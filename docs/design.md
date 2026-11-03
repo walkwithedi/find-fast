@@ -23,7 +23,7 @@ Linux 上的全盘文件名秒搜工具，中文名「秒搜文件」。第一�
 1. 用时启动，关窗即退出，不常驻。Gtk.Application 保证单实例：已在运行时再次启动，激活已有窗口。
 2. 启动后马上载入紧凑二进制缓存即可搜索；后台按目录修改时间增量补扫，状态栏显示进度。
 3. 窗口开着时用 inotify 实时更新（ctypes），后台建立监听；监听数超过 max_user_watches 时，超出部分退回定时扫描。
-4. 全局快捷键：在设置里录入后，用 gsettings 写入桌面的自定义快捷键（UKUI：org.ukui.control-center.keybinding，路径 /org/ukui/desktop/keybindings/find-fast/；GNOME：media-keys 的 custom-keybindings，路径 …/custom-keybindings/find-fast/），只增改本工具那一条；命令为 `find-fast --toggle`（已用 install.sh 安装时）或 `python3 <目录>/find_fast.py --toggle`。--toggle 由已运行的实例处理：在前台则隐藏（索引照常更新），否则调到前台并全选搜索框。识别不了桌面时只给出命令供手动绑定。窗口内快捷键存于 config.json 的 keys。`--remove-hotkey`（install.sh --uninstall 调用）删除写入的那一条。
+4. 全局快捷键：在设置里录入后，用 gsettings 写入桌面的自定义快捷键（UKUI：org.ukui.control-center.keybinding，路径 /org/ukui/desktop/keybindings/find-fast/；GNOME：media-keys 的 custom-keybindings，路径 …/custom-keybindings/find-fast/），只增改本工具那一条；命令为 `find-fast --toggle`（已用 install.sh 安装时）或 `python3 <目录>/find_fast.py --toggle`。--toggle 由已运行的实例处理：在前台则隐藏（索引照常更新），否则调到前台并全选搜索框。识别不了桌面时只给出命令供手动绑定。默认唤起键 Ctrl+Alt+Space：`install.sh` 调用 `--default-hotkey` 时写入（并把已设的唤起键改指向安装后的命令），未安装时首次启动（窗口或网页）写入；只在 config.json 的 keys 里从未有过 toggle 时写一次，写后记 `toggle_default_done`；该键已被桌面占用、识别不了桌面或写入出错时不写，并说明原因。窗口内快捷键存于 config.json 的 keys。`--remove-hotkey`（install.sh --uninstall 调用）删除写入的那一条。
 
 ## 五、索引范围
 
@@ -36,9 +36,9 @@ Linux 上的全盘文件名秒搜工具，中文名「秒搜文件」。第一�
 
 ## 六、功能
 
-1. 搜索语法：多个词同时匹配（不区分大小写）、正则表达式、通配符 `*` `?`、`!` 排除、`|` 表示或、`path:` 匹配完整路径、`ext:` 按扩展名过滤。按大小、日期过滤留到第二版。
+1. 搜索语法：多个词同时匹配（不区分大小写；普通词按完整路径匹配，可在文件名或任一层文件夹名里，设置 `match_path` 可关；通配、`ext:`、`regex:` 只看文件名）、正则表达式、通配符 `*` `?`、`!` 排除、`|` 表示或、`path:` 匹配完整路径、`ext:` 按扩展名过滤。按大小、日期过滤留到第二版。
 2. 类似版本：在当前结果内按文件名归组（规则集中在 `find_fast_core.py` 的 VERSION_MARKS：副本标记、开头序号、首尾日期、版本号、稿件词，再忽略大小写、全半角、空格与括号，扩展名须相同，去标记后少于 2 个字不归组；文件夹不参与）。组内修改时间最新者（同时取路径较短）标「最新」，其余标「有更新版」；悬停追加同组数量与最新路径；右键「跳到最新版」。超过 100000 条不分组并在状态栏写明，5000 条以上后台计算。
-3. GTK 结果列表：名称、路径、大小、修改时间四列，点列头排序（默认最新在前）；只渲染可见行，不限制结果条数；第五列为定位按钮；回车打开，Ctrl+Enter 定位，Ctrl+C 复制文件（剪贴板同时提供 x-special/gnome-copied-files、text/uri-list 与路径文本），Ctrl+Shift+C 复制路径；右键依次为定位、打开、复制文件、复制路径，分隔线后为跳到最新版、排除、重新扫描；可拖到其他程序；悬停结果行提示完整路径。
+3. GTK 结果列表：名称、路径、大小、修改时间四列，点列头排序（默认最新在前），拖动列头或在设置里上移、下移调整列顺序（定位列固定在最后，顺序存入界面状态；网页存于浏览器本地存储）；只渲染可见行，不限制结果条数；第五列为定位按钮；回车打开，Ctrl+Enter 定位，Ctrl+C 复制文件（剪贴板同时提供 x-special/gnome-copied-files、text/uri-list 与路径文本），Ctrl+Shift+C 复制路径；右键依次为定位、打开、复制文件、复制路径，分隔线后为跳到最新版、排除、重新扫描；可拖到其他程序；悬停结果行提示完整路径。
 4. GTK 窗口在搜索框为空时只显示搜索框一行（原位置变矮、宽度不变），输入即展开到记住的高度，无结果也展开并显示「没有找到」；最大化时不收起；收起时搜索框右侧小字显示索引状态与临时提示，版本号在悬停说明中；收起时的高度不写入界面状态。
 5. GTK 窗口紧凑排布（单元格上下边距约 1px，字体与颜色跟随系统）；失焦时整窗 70% 不透明（需合成器，本窗口菜单与对话框不算失焦）；列宽、窗口大小、最大化、位置（Wayland 下与离开显示器时不恢复）与排序存于 `~/.config/find-fast/ui-state.json`（600），关窗时写入，坏值回退默认。网页不受影响。
 6. 界面中英双语，按 `LANG` 选择；文字集中在一个字典里，不用 gettext。

@@ -203,5 +203,104 @@ class HotkeyTest(unittest.TestCase):
             shutil.rmtree(tmp, ignore_errors=True)
 
 
+class DefaultToggleTest(unittest.TestCase):
+    """The default global shortcut: written once when none was ever set and the keys are free."""
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp(prefix='ff-keys-')
+        self.path = os.path.join(self.tmp, 'config.json')
+
+    def tearDown(self):
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def config(self, data=None):
+        return core.Config(self.path, dict(data or {}, roots=[self.tmp]))
+
+    def hk(self, fake, desktop='GNOME'):
+        return ui.DesktopHotkey(run=fake.run, env={'XDG_CURRENT_DESKTOP': desktop}, which=fake.which)
+
+    def test_accel_text(self):
+        self.assertEqual(ui.accel_text(ui.DEFAULT_TOGGLE), 'Ctrl+Alt+Space')
+        self.assertEqual(ui.accel_text('<Shift><Super>f5'), 'Shift+Super+F5')
+        self.assertEqual(ui.accel_text(''), '')
+
+    def test_written_once_when_free(self):
+        fake = gnome()
+        c = self.config()
+        text, kind = ui.ensure_default_toggle(c, self.hk(fake), 'zh')
+        self.assertEqual(kind, 'ok')
+        self.assertIn('Ctrl+Alt+Space', text)
+        where = H.GNOME_ENTRY + ':' + H.GNOME_PATH
+        self.assertEqual(fake.values[(where, 'binding')], "'<Primary><Alt>space'")
+        self.assertIn('--toggle', fake.values[(where, 'command')])
+        saved = core.Config(self.path)
+        self.assertEqual(saved.other['keys'], {'toggle': ui.DEFAULT_TOGGLE})
+        self.assertTrue(saved.other['toggle_default_done'])
+        self.assertEqual(ui.load_keys(saved)['toggle'], ui.DEFAULT_TOGGLE)
+        # a second start does nothing, even after the user cleared the shortcut
+        saved.other['keys'] = {'toggle': ''}
+        fake.calls.clear()
+        self.assertIsNone(ui.ensure_default_toggle(saved, self.hk(fake), 'zh'))
+        self.assertFalse(any(c[1] == 'set' for c in fake.calls))
+
+    def test_left_alone_when_set_or_cleared_before(self):
+        for keys in ({'toggle': ''}, {'toggle': '<Super>f'}):
+            fake = gnome()
+            c = self.config({'keys': dict(keys, locate='<Alt>l')})
+            self.assertIsNone(ui.ensure_default_toggle(c, self.hk(fake), 'en'))
+            self.assertFalse(any(x[1] == 'set' for x in fake.calls))
+            saved = core.Config(self.path)
+            self.assertTrue(saved.other['toggle_default_done'])
+            self.assertEqual(saved.other['keys'], dict(keys, locate='<Alt>l'))
+
+    def test_taken_keys_not_written(self):
+        fake = ukui()
+        fake.values[('org.ukui.SettingsDaemon.plugins.media-keys', 'search')] = "'<Control><Alt>space'"
+        c = self.config({'keys': {'locate': '<Alt>l'}})
+        text, kind = ui.ensure_default_toggle(c, self.hk(fake, 'UKUI'), 'zh')
+        self.assertEqual(kind, 'warn')
+        self.assertTrue(text.startswith('设置默认唤起快捷键失败：Ctrl+Alt+Space 已被桌面快捷键「search」占用。'), text)
+        self.assertNotIn((H.UKUI_ENTRY + ':' + H.UKUI_PATH, 'binding'), fake.values)
+        saved = core.Config(self.path)
+        self.assertEqual(saved.other['keys'], {'locate': '<Alt>l'})
+        self.assertTrue(saved.other['toggle_default_done'])
+        self.assertIsNone(ui.ensure_default_toggle(saved, self.hk(fake, 'UKUI'), 'zh'))
+
+    def test_unknown_desktop_and_write_error(self):
+        fake = gnome()
+        text, kind = ui.ensure_default_toggle(self.config(), self.hk(fake, 'XFCE'), 'en')
+        self.assertEqual(kind, 'warn')
+        self.assertIn('--toggle', text)
+        self.assertFalse(any(x[1] == 'set' for x in fake.calls))
+
+        class Failing(FakeSettings):
+            def run(self, args):
+                if args[:2] == ['gsettings', 'set']:
+                    return 1, ''
+                return FakeSettings.run(self, args)
+
+        os.remove(self.path)
+        broken = Failing(gnome().schemas, gnome().values)
+        text, kind = ui.ensure_default_toggle(self.config(), self.hk(broken), 'zh')
+        self.assertEqual(kind, 'bad')
+        self.assertTrue(text.startswith('设置默认唤起快捷键失败：写入系统快捷键时出错'), text)
+        self.assertNotIn('toggle', core.Config(self.path).other.get('keys', {}))
+
+    def test_refresh_rewrites_the_command(self):
+        fake = gnome()
+        c = self.config({'keys': {'toggle': '<Super>f'}, 'toggle_default_done': True})
+        self.assertIsNone(ui.ensure_default_toggle(c, self.hk(fake), 'en'))
+        self.assertFalse(any(x[1] == 'set' for x in fake.calls))
+        self.assertIsNone(ui.ensure_default_toggle(c, self.hk(fake), 'en', refresh=True))
+        where = H.GNOME_ENTRY + ':' + H.GNOME_PATH
+        self.assertEqual(fake.values[(where, 'binding')], "'<Super>f'")
+        self.assertIn('--toggle', fake.values[(where, 'command')])
+
+    def test_default_toggle_is_a_valid_shortcut(self):
+        self.assertEqual(ui.KEY_DEFAULTS['toggle'], '')
+        self.assertTrue(ui.plain_key_ok(ui.DEFAULT_TOGGLE))
+        self.assertFalse(ui.is_fixed_key(ui.DEFAULT_TOGGLE))
+
+
 if __name__ == '__main__':
     unittest.main()

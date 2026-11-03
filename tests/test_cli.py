@@ -72,6 +72,28 @@ class CliTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn('global shortcut not found', p.stderr)
 
+    def test_default_hotkey_without_a_desktop(self):
+        # no desktop to write to: said once, recorded in the settings, nothing touched
+        env = {'PATH': os.path.join(self.tmp, 'empty-bin'), 'LANG': 'en_US.UTF-8', 'HOME': self.tmp}
+        config = os.path.join(self.tmp, 'ff-config.json')
+        cmd = [sys.executable, os.path.join(ROOT, 'find_fast.py'), '--default-hotkey', '--config', config]
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('Setting the default show-or-hide shortcut failed', p.stdout)
+        with open(config, encoding='utf-8') as f:
+            self.assertTrue(json.load(f)['toggle_default_done'])
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual((p.returncode, p.stdout), (0, ''))
+
+    def test_words_match_folders_unless_turned_off(self):
+        self.assertEqual(self.run_ff('old', '2019').stdout.strip(), os.path.join(self.root, 'docs', 'old', 'report-2019.pdf'))
+        with open(self.config, encoding='utf-8') as f:
+            data = json.load(f)
+        data['match_path'] = False
+        with open(self.config, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        self.assertEqual(self.run_ff('old', '2019').returncode, 1)
+
 
 if __name__ == '__main__':
     unittest.main()
