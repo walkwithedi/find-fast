@@ -190,6 +190,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
+- 0.5.1: an upgrade gives the new files permissions that follow the umask.
 - 0.5.0: upgrade in place from a release zip or folder, in Settings, on the page and on the command line, keeping the previous version for roll-back.
 - 0.3.1: feedback address in the READMEs; no change to the tool.
 - 0.3.0: search words also match folder names in the path (can be turned off in Settings); result columns can be reordered by dragging or in Settings; default show-or-hide shortcut Ctrl+Alt+Space, written on install.
