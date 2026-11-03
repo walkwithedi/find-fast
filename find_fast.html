@@ -42,6 +42,9 @@
   tr[aria-selected="true"] td { background:var(--sel); }
   tbody tr { cursor:default; }
   .kind { display:inline-block; width:1.4em; color:var(--muted); }
+  .tag { display:inline-block; font-size:12px; line-height:1.3; padding:0 5px; margin-right:6px; border-radius:4px;
+         border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .tag.newest { border-color:var(--ok); color:var(--ok); }
   #more { display:none; margin:8px auto; }
   footer { color:var(--muted); font-size:13px; margin-top:20px; border-top:1px solid var(--line); padding-top:10px;
            display:flex; flex-wrap:wrap; gap:8px 16px; justify-content:space-between; }
@@ -70,6 +73,7 @@
          border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.2); padding:4px 0; }
   #ctx[hidden] { display:none; }
   #ctx button { display:block; width:100%; text-align:left; border:0; border-radius:0; background:transparent; padding:6px 14px; }
+  #ctx button[hidden] { display:none; }
   #ctx button:hover, #ctx button:focus-visible { background:var(--sel); }
   #ctx hr { border:0; border-top:1px solid var(--line); margin:4px 0; }
   code { font-family:"Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; font-size:13px; }
@@ -121,6 +125,7 @@
     <button type="button" role="menuitem" id="mFolder">打开所在文件夹</button>
     <button type="button" role="menuitem" id="mCopy">复制路径</button>
     <hr>
+    <button type="button" role="menuitem" id="mJump">跳到最新版</button>
     <button type="button" role="menuitem" id="mExclude">排除所在文件夹</button>
     <button type="button" role="menuitem" id="mRescan">重新扫描</button>
   </div>
@@ -185,6 +190,8 @@ const T = {
     saveFailed: e => '保存失败：' + e + '。请检查后再试。',
     applying: '正在按新设置更新索引……', applied: '已按新设置更新索引',
     excludeThis: '排除此文件夹', excludeParent: '排除所在文件夹',
+    verNewest: '最新', verOlder: '有更新版', jump: '跳到最新版', verSkipped: '结果过多，未标出类似版本',
+    verTip: (n, p) => '同组共 ' + n + ' 个类似版本，最新：' + p,
     excludeQ: p => '排除 ' + p + '？\n\n这个文件夹及其中的全部条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
   },
   en: {
@@ -213,6 +220,8 @@ const T = {
     saveFailed: e => 'Save failed: ' + e + '. Check and try again.',
     applying: 'Updating the index for the new settings...', applied: 'Index updated for the new settings',
     excludeThis: 'Exclude this folder', excludeParent: 'Exclude the containing folder',
+    verNewest: 'Newest', verOlder: 'Newer exists', jump: 'Go to the newest version', verSkipped: 'Too many results to mark similar versions',
+    verTip: (n, p) => n + ' similar versions; newest: ' + p,
     excludeQ: p => 'Exclude ' + p + '?\n\nThe folder and everything in it are removed from the index and no longer indexed. Remove the rule under Excluded in Settings to undo this.',
   },
 };
@@ -261,8 +270,11 @@ function setStatus(text, kind) {
   s.className = kind || '';
   s.textContent = text;
 }
+let versions = 'ready';
 function showCount(ms) {
-  setStatus(ms === undefined ? L.results(count.toLocaleString()) : L.results_ms(count.toLocaleString(), ms), '');
+  let text = ms === undefined ? L.results(count.toLocaleString()) : L.results_ms(count.toLocaleString(), ms);
+  if (versions === 'too_many') text += ' · ' + L.verSkipped;
+  setStatus(text, '');
 }
 
 function applyLanguage(lang) {
@@ -290,7 +302,7 @@ function applyLanguage(lang) {
   $('setDefaults').textContent = L.defaults; $('setCancel').textContent = L.cancel;
   $('setAnyway').textContent = L.saveAnyway; $('setSave').textContent = L.save;
   $('mOpen').textContent = L.open; $('mFolder').textContent = L.folder; $('mCopy').textContent = L.copy;
-  $('mRescan').textContent = L.rescan;
+  $('mRescan').textContent = L.rescan; $('mJump').textContent = L.jump;
 }
 
 function showIndex(st) {
@@ -334,14 +346,21 @@ function renderRow(r) {
   tr.setAttribute('role', 'option');
   tr.setAttribute('aria-selected', 'false');
   tr.dataset.k = r.k;
-  tr.title = r.path;
+  tr.title = r.ver ? r.path + '\n' + L.verTip(r.ver_count, r.ver_newest_path) : r.path;
   const name = document.createElement('td');
   name.className = 'name';
   const kind = document.createElement('span');
   kind.className = 'kind';
   kind.textContent = r.folder ? '📁' : '';
   if (r.folder) kind.setAttribute('aria-label', L.folderKind);
-  name.append(kind, document.createTextNode(r.name));
+  name.append(kind);
+  if (r.ver) {
+    const tag = document.createElement('span');
+    tag.className = 'tag ' + r.ver;
+    tag.textContent = r.ver === 'newest' ? L.verNewest : L.verOlder;
+    name.append(tag);
+  }
+  name.append(document.createTextNode(r.name));
   const dir = document.createElement('td'); dir.className = 'dir'; dir.textContent = r.dir;
   const size = document.createElement('td'); size.className = 'size'; size.textContent = r.size_text;
   const time = document.createElement('td'); time.className = 'time'; time.textContent = r.time;
@@ -378,7 +397,7 @@ function search(keep) {
       $('more').style.display = 'none';
       return;
     }
-    sid = j.sid; count = j.count; rows = j.rows;
+    sid = j.sid; count = j.count; rows = j.rows; versions = j.versions;
     const body = $('rows');
     body.textContent = '';
     rows.forEach(r => body.appendChild(renderRow(r)));
@@ -387,7 +406,49 @@ function search(keep) {
     select(k);
     showCount(j.ms);
     $('more').style.display = rows.length < count ? 'block' : 'none';
+    if (versions === 'pending') refreshMarks(my, 0);
   }).catch(e => { if (my === seq) setStatus(L.search_failed(e.message), 'bad'); });
+}
+
+// large results are grouped in the background: fetch the loaded rows again once the marks are ready
+function refreshMarks(my, tries) {
+  setTimeout(() => {
+    if (my !== seq || !sid || tries > 40) return;
+    const p = new URLSearchParams({page: PAGE, sid: sid, offset: 0, limit: Math.min(rows.length, 500)});
+    api('/api/rows?' + p).then(j => {
+      if (my !== seq) return;
+      if (j.versions === 'pending') { refreshMarks(my, tries + 1); return; }
+      versions = j.versions;
+      const body = $('rows');
+      j.rows.forEach(r => {
+        const old = body.children[r.k];
+        if (!old) return;
+        rows[r.k] = r;
+        const tr = renderRow(r);
+        tr.setAttribute('aria-selected', old.getAttribute('aria-selected'));
+        body.replaceChild(tr, old);
+      });
+    }).catch(() => {});
+  }, 400);
+}
+
+// make row k loaded (fetching more pages when needed), then select it
+function jumpTo(k) {
+  if (k < rows.length) { select(k, true); return; }
+  if (!sid) return;
+  if (loadingMore) { setTimeout(() => jumpTo(k), 100); return; }
+  loadingMore = true;
+  const my = seq;
+  let again = false;
+  const p = new URLSearchParams({page: PAGE, sid: sid, offset: rows.length, limit: Math.min(500, k - rows.length + 1)});
+  api('/api/rows?' + p).then(j => {
+    if (my !== seq) return;
+    const body = $('rows');
+    j.rows.forEach(r => { rows.push(r); body.appendChild(renderRow(r)); });
+    $('more').style.display = rows.length < count ? 'block' : 'none';
+    again = j.rows.length > 0;
+  }).catch(e => { if (e.status === 409) search(true); })
+    .finally(() => { loadingMore = false; if (again) jumpTo(k); });
 }
 
 function loadMore() {
@@ -576,6 +637,7 @@ function closeMenu() {
 function openMenu(x, y) {
   if (cur < 0 || !rows[cur] || !alive) return;
   const r = rows[cur];
+  $('mJump').hidden = r.ver !== 'older';
   $('mExclude').textContent = r.folder ? L.excludeThis : L.excludeParent;
   $('mExclude').hidden = !r.can_exclude;
   const m = $('ctx');
@@ -623,6 +685,7 @@ $('ctx').addEventListener('click', ev => {
   else if (b.id === 'mFolder') openCurrent(true);
   else if (b.id === 'mCopy') copyCurrent();
   else if (b.id === 'mExclude') excludeCurrent();
+  else if (b.id === 'mJump') jumpTo(rows[cur].ver_newest);
   else if (b.id === 'mRescan') $('rescan').click();
 });
 document.addEventListener('mousedown', ev => { if (!$('ctx').hidden && !ev.target.closest('#ctx')) closeMenu(); });

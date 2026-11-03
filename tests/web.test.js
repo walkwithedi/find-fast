@@ -22,6 +22,9 @@ function startServer(tmp, lang) {
   touch(path.join(root, 'docs', 'report-draft.docx'), 'x'.repeat(20), 1700000200);
   touch(path.join(root, 'docs', 'old', 'report-2019.pdf'), 'x', 1600000000);
   touch(path.join(root, 'pics', '项目报告.pptx'), 'x', 1700000500);
+  touch(path.join(root, 'v', '示例方案.docx'), 'x', 1700000600);
+  touch(path.join(root, 'v', 'a', '示例方案_v2.docx'), 'x', 1700000800);
+  touch(path.join(root, 'v', 'b', '示例方案-终稿.docx'), 'x', 1700000700);
   for (let i = 0; i < 450; i++) touch(path.join(root, 'many', 'item-' + String(i).padStart(3, '0') + '.txt'), '', 1500000000 + i);
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({roots: [root]}));
   const bin = path.join(tmp, 'bin');
@@ -123,6 +126,21 @@ async function rowNames(page) {
     await page.click('#more');
     await page.waitForFunction(() => document.querySelectorAll('#rows tr').length === 400);
 
+    // similar versions: tags, the hover line and "go to the newest version"
+    await page.selectOption('#sort', 'mtime:1');
+    await page.fill('#q', '示例方案');
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+    assert.deepStrictEqual(await page.$$eval('#rows tr', trs => trs.map(tr => (tr.querySelector('.tag') || {}).textContent)),
+      ['最新', '有更新版', '有更新版']);
+    assert.match(await page.getAttribute('#rows tr:nth-child(3)', 'title'), /\n同组共 3 个类似版本，最新：.*示例方案_v2\.docx$/);
+    await page.click('#rows tr:nth-child(3)', {button: 'right'});
+    assert.ok(await page.isVisible('#mJump'));
+    await page.click('#mJump');
+    await page.waitForFunction(() => document.querySelector('tr[aria-selected="true"] td.name').textContent.endsWith('示例方案_v2.docx'));
+    await page.click('#rows tr:nth-child(1)', {button: 'right'});
+    assert.ok(await page.isHidden('#mJump'));
+    await page.keyboard.press('Escape');
+
     // right-click a row: exclude its folder after confirming
     await page.fill('#q', 'report-2019');
     await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
@@ -143,6 +161,7 @@ async function rowNames(page) {
     await page.waitForFunction(() => document.querySelector('#rows td.name') && /pics/.test(document.querySelector('#rows td.name').textContent));
     await page.click('#rows tr', {button: 'right'});
     assert.strictEqual(await page.textContent('#mExclude'), '排除此文件夹');
+    assert.ok(await page.isHidden('#mJump'));
     await page.keyboard.press('Escape');
     assert.ok(await page.isHidden('#ctx'));
 

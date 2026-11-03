@@ -64,13 +64,26 @@ Folders appear in the results as well.
 
 - Type to search; ↓ moves into the list and ↑ on the first row back to the box; typing in the list continues in the box.
 - ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter opens the containing folder, with the item selected where the file manager supports it; Ctrl+C copies the path.
-- Right click or the Menu key (Shift+F10): open, open containing folder, copy path, Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first and names the folder; the item is not shown when that folder is an indexed folder itself.
+- Right click or the Menu key (Shift+F10): open, open containing folder, copy path, Go to the newest version (on Newer exists rows), Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first and names the folder; the item is not shown when that folder is an indexed folder itself.
 - Click a column header to sort by name, path, size or modification time; click again to reverse. Newest first by default.
 - Hovering a result row shows its full path.
+- Similar versions: several versions of one file (copies, copies saved with a date or version number, drafts and finals) form a group; the newest by modification time is tagged Newest before its name and the others Newer exists. Results are shown as usual, not folded. Hovering adds a line with the group size and the newest one; right-click a Newer exists row for Go to the newest version. The rules are under "Similar versions" below.
 - The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
 - F5 or Ctrl+R rescans; Esc clears the box, and a second Esc closes the window.
 - The status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
+
+### Similar versions
+
+Only files are grouped, not folders, and only within the current result (across folders). From the name without its extension these marks are removed in turn, then differences of case, full- and half-width forms, spaces and brackets are ignored; files with the same remainder and the same extension form a group:
+
+- copy marks: `(1)`, `（2）`, `- 副本`, `_copy`, `copy of`;
+- a leading number: `1 `, `02_`;
+- a date at the start or end: `20260101`, `2026-01-01`, `2026.1.1`, `260101`, optionally in brackets;
+- a version number: `v2`, `V2.1`, `ver3`, `第二版`;
+- a draft word: 初稿, 二稿, 三稿, 终稿, 定稿, 修订版, 修改版, 最终版, 最终稿, final, draft.
+
+A remainder shorter than 2 characters is not grouped. The newest in a group is the latest modification time, the shorter path on a tie. Results above 100,000 are not grouped and the status bar says so; from 5,000 up the grouping runs in the background and the tags appear when it is done.
 
 ### Browser page
 
@@ -138,7 +151,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
-- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu.
+- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked.
 - 0.1.0: first version.
 
 ## Licence

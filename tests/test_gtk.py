@@ -271,6 +271,59 @@ class GtkTest(unittest.TestCase):
         """Press a window accelerator."""
         return ui.Gtk.accel_groups_activate(self.w.win, keyval, ui.Gdk.ModifierType(mods))
 
+    def test_similar_versions(self):
+        d = os.path.join(self.root, 'v')
+        touch(os.path.join(d, '示例方案.docx'), b'', 1700001000)
+        touch(os.path.join(d, 'a', '示例方案_v2.docx'), b'', 1700003000)
+        touch(os.path.join(d, 'b', '示例方案-终稿.docx'), b'', 1700002000)
+        touch(os.path.join(d, '示例方案.pdf'), b'', 1700005000)
+        w = self.window()
+        self.type('示例方案')
+        tags = {r[1]: r[ui.COL_TAG] for r in w.store}
+        self.assertEqual(tags, {'示例方案.pdf': '', '示例方案_v2.docx': 'Newest',
+                                '示例方案-终稿.docx': 'Newer exists', '示例方案.docx': 'Newer exists'})
+        k = self.names().index('示例方案.docx')
+        tip = ui.Pango.parse_markup(w.store[k][ui.COL_TIP], -1, '\0')[2]
+        self.assertEqual(tip, os.path.join(d, '示例方案.docx') + '\n3 similar versions; newest: '
+                         + os.path.join(d, 'a', '示例方案_v2.docx'))
+        w.columns['name'].clicked()
+        pump(0.05)
+        self.assertEqual({r[1]: r[ui.COL_TAG] for r in w.store}, tags)
+        w.cur = w.top + self.names().index('示例方案.docx')
+        w.popup_menu(None)
+        self.assertTrue(w.jump_item.get_visible())
+        w.menu.popdown()
+        w.jump_to_newest()
+        self.assertEqual(w.current_path(), os.path.join(d, 'a', '示例方案_v2.docx'))
+        w.popup_menu(None)
+        self.assertFalse(w.jump_item.get_visible())
+        w.menu.popdown()
+
+    def test_versions_grouped_in_background(self):
+        touch(os.path.join(self.root, 'v', 'plan.txt'), b'', 1700001000)
+        touch(os.path.join(self.root, 'v', 'plan_v2.txt'), b'', 1700002000)
+        w = self.window()
+        old = ui.VERSIONS_SYNC
+        ui.VERSIONS_SYNC = 1
+        try:
+            self.type('plan')
+            self.assertTrue(pump(until=lambda: w.versions is not None))
+        finally:
+            ui.VERSIONS_SYNC = old
+        pump(0.05)
+        self.assertEqual({r[1]: r[ui.COL_TAG] for r in w.store}, {'plan_v2.txt': 'Newest', 'plan.txt': 'Newer exists'})
+
+    def test_too_many_results_not_grouped(self):
+        w = self.window()
+        old = core.VERSION_GROUP_LIMIT
+        core.VERSION_GROUP_LIMIT = 3
+        try:
+            self.type('')
+        finally:
+            core.VERSION_GROUP_LIMIT = old
+        self.assertTrue(w.versions.skipped)
+        self.assertIn('Too many results to mark similar versions', w.status.get_text())
+
     def test_open_missing_file(self):
         w = self.window()
         self.type('notes')

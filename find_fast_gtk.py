@@ -39,6 +39,9 @@ UI = {
         'open_failed': '打开失败：{error}。请检查文件是否还在，或用文件管理器打开。',
         'gone': '打开失败：文件已不存在。索引将在下次扫描时更新。',
         'unreadable': '{count} 个文件夹无法读取',
+        'ver_newest': '最新', 'ver_older': '有更新版', 'jump_newest': '跳到最新版',
+        'ver_tip': '同组共 {count} 个类似版本，最新：{path}',
+        'ver_skipped': '结果过多，未标出类似版本',
         'settings': '设置', 'set_roots': '索引的文件夹', 'set_exclude': '排除',
         'set_exclude_hint': '名称规则，如 node_modules、*.tmp', 'set_hidden': '索引隐藏文件和文件夹',
         'add_folder': '添加文件夹……', 'add': '添加', 'remove': '删除', 'remove_item': '删除 {item}',
@@ -67,6 +70,9 @@ UI = {
         'open_failed': 'Open failed: {error}. Check that the file still exists, or open it from a file manager.',
         'gone': 'Open failed: the file no longer exists. The index is updated at the next scan.',
         'unreadable': '{count} folders unreadable',
+        'ver_newest': 'Newest', 'ver_older': 'Newer exists', 'jump_newest': 'Go to the newest version',
+        'ver_tip': '{count} similar versions; newest: {path}',
+        'ver_skipped': 'Too many results to mark similar versions',
         'settings': 'Settings', 'set_roots': 'Indexed folders', 'set_exclude': 'Excluded',
         'set_exclude_hint': 'Name rule, such as node_modules or *.tmp', 'set_hidden': 'Index hidden files and folders',
         'add_folder': 'Add folder...', 'add': 'Add', 'remove': 'Remove', 'remove_item': 'Remove {item}',
@@ -84,6 +90,8 @@ UI = {
 }
 COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime')]
 COL_TIP = 5                     # store column holding the row's tooltip
+COL_TAG = 6                     # store column holding the similar-version tag
+VERSIONS_SYNC = 5000            # results up to this size are grouped at once, larger ones in the background
 DEFAULT_DESC = {'name': False, 'path': False, 'size': True, 'mtime': True}
 
 Gtk = Gdk = GLib = Gio = Pango = None
@@ -146,6 +154,7 @@ class Window:
         self.worker = None
         self.message = None             # (text, kind) shown instead of the result count
         self.query = None               # text of the last search
+        self.versions = None            # core.VersionGroups of the result, once worked out
         self.searches = 0
         self.closed = False             # set when the window is destroyed; late callbacks do nothing
         self.build()
@@ -183,8 +192,8 @@ class Window:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(row, True, True, 0)
 
-        # icon name, name, folder, size, time, tooltip (Pango markup: the full path)
-        self.store = Gtk.ListStore(str, str, str, str, str, str)
+        # icon name, name, folder, size, time, tooltip (Pango markup), similar-version tag
+        self.store = Gtk.ListStore(str, str, str, str, str, str, str)
         tv = self.tree = Gtk.TreeView(model=self.store)
         tv.set_tooltip_column(COL_TIP)
         tv.set_enable_search(False)
@@ -204,6 +213,11 @@ class Window:
                 icon = Gtk.CellRendererPixbuf()
                 col.pack_start(icon, False)
                 col.add_attribute(icon, 'icon-name', 0)
+                tag = Gtk.CellRendererText()
+                tag.set_property('sensitive', False)       # the theme's secondary text
+                tag.set_property('scale', 0.85)
+                col.pack_start(tag, False)
+                col.add_attribute(tag, 'text', COL_TAG)
                 col.set_fixed_width(300)
                 col.set_expand(False)
             cell = Gtk.CellRendererText()
@@ -263,6 +277,9 @@ class Window:
             item.connect('activate', lambda _i, f=cb: f())
             self.menu.append(item)
         self.menu.append(Gtk.SeparatorMenuItem())
+        self.jump_item = Gtk.MenuItem(label=t(self.lang, 'jump_newest'))
+        self.jump_item.connect('activate', lambda *_: self.jump_to_newest())
+        self.menu.append(self.jump_item)
         self.exclude_item = Gtk.MenuItem(label=t(self.lang, 'exclude_parent'))
         self.exclude_item.connect('activate', lambda *_: self.exclude_current())
         self.menu.append(self.exclude_item)
@@ -509,9 +526,39 @@ class Window:
                 if self.result.path(k) == keep_path:
                     self.cur = k
                     break
+        self.start_versions()
         self.sync_adjustment()
         self.fill()
         self.update_status()
+
+    def start_versions(self):
+        """Group similar versions in the result: small results at once, others in the background
+        (the marks appear when done; a newer search makes the work stop)."""
+        res = self.result
+        self.versions = None
+        if res is None:
+            return
+        if len(res) <= VERSIONS_SYNC or len(res) > core.VERSION_GROUP_LIMIT:
+            self.versions = core.VersionGroups(res)
+            return
+
+        def work():
+            groups = core.VersionGroups(res, stop=lambda: self.result is not res or self.closed)
+            GLib.idle_add(done, groups)
+
+        def done(groups):
+            if not self.closed and self.result is res and not groups.skipped:
+                self.versions = groups
+                self.fill()
+            return False
+        threading.Thread(target=work, name='versions', daemon=True).start()
+
+    def jump_to_newest(self):
+        if self.versions is None:
+            return
+        k = self.versions.newest(self.cur)
+        if k is not None:
+            self.scroll_to(k)
 
     def count(self):
         return len(self.result) if self.result is not None else 0
@@ -598,8 +645,10 @@ class Window:
                 store.remove(store.get_iter(len(store) - 1))
             for j, k in enumerate(range(self.top, end)):
                 name, folder, size, mtime = res.row(k)
+                mark = self.versions.mark(k) if self.versions is not None else None
                 values = ['folder' if size < 0 else 'text-x-generic', core.display(name), core.display(folder),
-                          core.human_size(size), core.human_time(mtime), self.tooltip(k, name, folder)]
+                          core.human_size(size), core.human_time(mtime), self.tooltip(k, name, folder),
+                          t(self.lang, 'ver_' + mark) if mark else '']
                 if j < len(store):
                     store.set_row(store.get_iter(j), values)
                 else:
@@ -617,8 +666,13 @@ class Window:
             self.filling = False
 
     def tooltip(self, k, name, folder):
-        """Tooltip of result row k: the full path, escaped for Pango markup."""
-        return GLib.markup_escape_text(core.display(os.path.join(folder, name)), -1)
+        """Tooltip of result row k: the full path, and for a similar version the size of its group
+        and the newest one; escaped for Pango markup."""
+        text = core.display(os.path.join(folder, name))
+        v = self.versions
+        if v is not None and v.mark(k):
+            text += '\n' + t(self.lang, 'ver_tip', count=v.size(k), path=core.display(self.result.path(v.newest(k))))
+        return GLib.markup_escape_text(text, -1)
 
     def scroll_to(self, k):
         """Make result row k visible and selected."""
@@ -737,6 +791,7 @@ class Window:
     def popup_menu(self, event):
         if self.cur < 0:
             return
+        self.jump_item.set_visible(self.versions is not None and self.versions.mark(self.cur) == 'older')
         target, is_dir = self.exclude_target()
         self.exclude_item.set_label(t(self.lang, 'exclude_this' if is_dir else 'exclude_parent'))
         self.exclude_item.set_visible(target is not None)
@@ -841,7 +896,10 @@ class Window:
         if self.result is None:
             self.status.set_text('')
             return
-        self.status.set_text(t(self.lang, 'results_ms', count='{:,}'.format(self.count()), ms=self.result.ms))
+        text = t(self.lang, 'results_ms', count='{:,}'.format(self.count()), ms=self.result.ms)
+        if self.versions is not None and self.versions.skipped:
+            text += ' · ' + t(self.lang, 'ver_skipped')
+        self.status.set_text(text)
 
     def set_state(self, text):
         self.state.set_text(text)

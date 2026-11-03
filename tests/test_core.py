@@ -420,6 +420,81 @@ class SettingsTest(TempTree):
         self.assertEqual(idx.state, 'ready')
 
 
+class VersionTest(TempTree):
+    SAME = ['示例方案.docx', '示例方案(1).docx', '示例方案（2）.docx', '【20260101】示例方案.docx',
+            '2026-01-01_示例方案.docx', '示例方案_20260101.docx', '示例方案_v2.docx', '示例方案 V2.1.docx',
+            '示例方案第二版.docx', '示例方案-终稿.docx', '（初稿）示例方案.docx', '示例方案 final.docx',
+            '1 示例方案.docx', '02_示例方案.docx', '示例方案 - 副本.docx', '示例方案_copy.docx',
+            'Copy of 示例方案.docx', '［示例方案］.docx', '示例 方案.docx', '2026-01-01_示例方案_V2.1(1).docx']
+
+    def test_marks_group_together(self):
+        keys = {core.version_key(n) for n in self.SAME}
+        self.assertEqual(len(keys), 1, keys)
+        self.assertIsNotNone(keys.pop())
+
+    def test_not_grouped(self):
+        k = core.version_key('示例方案.docx')
+        self.assertNotEqual(core.version_key('示例方案.pdf'), k)            # another extension
+        self.assertNotEqual(core.version_key('示例计划.docx'), k)            # another stem
+        self.assertNotEqual(core.version_key('Report 2024.pdf'), core.version_key('Report 2025.pdf'))
+        self.assertIsNone(core.version_key('1.docx'))                       # too short once marks go
+        self.assertIsNone(core.version_key('v2.docx'))
+        self.assertIsNone(core.version_key('a(1).txt'))
+        self.assertEqual(core.version_key('Plan.DOCX'), core.version_key('plan_v3.docx'))
+
+    def make_versions(self):
+        d = os.path.join(self.root, 'v')
+        touch(os.path.join(d, '示例方案.docx'), b'', 1700001000)
+        touch(os.path.join(d, 'a', '示例方案_v2.docx'), b'', 1700003000)           # newest
+        touch(os.path.join(d, 'b', '示例方案-终稿.docx'), b'', 1700002000)
+        touch(os.path.join(d, '示例方案(1)', 'x.txt'), b'', 1700004000)              # a folder: not grouped
+        touch(os.path.join(d, 'c', '示例方案.pdf'), b'', 1700005000)                 # other extension
+        touch(os.path.join(d, 'tie', 'ab', '同时.txt'), b'', 1700006000)
+        touch(os.path.join(d, 'tie', '同时(1).txt'), b'', 1700006000)               # same time, shorter path wins
+        return self.index()
+
+    def test_groups_in_a_result(self):
+        idx = self.make_versions()
+        for sort, desc in (('mtime', True), ('name', False), ('path', False)):
+            res = idx.search('示例方案', sort, desc)
+            g = core.VersionGroups(res)
+            marks = {os.path.relpath(res.path(k), self.root): g.mark(k) for k in range(len(res))}
+            self.assertEqual(marks['v/a/示例方案_v2.docx'], 'newest')
+            self.assertEqual(marks['v/示例方案.docx'], 'older')
+            self.assertEqual(marks['v/b/示例方案-终稿.docx'], 'older')
+            self.assertIsNone(marks['v/示例方案(1)'])
+            self.assertIsNone(marks['v/c/示例方案.pdf'])
+            k = [k for k in range(len(res)) if res.path(k).endswith('示例方案.docx')][0]
+            self.assertEqual(res.path(g.newest(k)), os.path.join(self.root, 'v', 'a', '示例方案_v2.docx'))
+            self.assertEqual(g.size(k), 3)
+        res = idx.search('同时')
+        g = core.VersionGroups(res)
+        self.assertEqual(res.path(g.newest(0)), os.path.join(self.root, 'v', 'tie', '同时(1).txt'))
+
+    def test_limit_and_stop(self):
+        idx = self.make_versions()
+        res = idx.search('示例方案')
+        self.assertTrue(core.VersionGroups(res, limit=2).skipped)
+        g = core.VersionGroups(res, stop=lambda: True)
+        self.assertTrue(g.skipped)
+        self.assertIsNone(g.mark(0))
+
+    def test_grouping_100k_rows_is_quick(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
+        import bench
+        idx = core.Index(self.config, self.cache, mounts={})
+        idx.base = core.build_base(bench.synthetic_records(core.VERSION_GROUP_LIMIT - 1000))
+        idx._reset_overlay()
+        res = idx.search('')
+        self.assertLessEqual(len(res), core.VERSION_GROUP_LIMIT)
+        t = time.perf_counter()
+        g = core.VersionGroups(res)
+        took = time.perf_counter() - t
+        sys.stderr.write('\ngrouping %d rows: %.2f s\n' % (len(res), took))
+        self.assertFalse(g.skipped)
+        self.assertLess(took, 5.0)
+
+
 class WatcherTest(TempTree):
     def test_inotify_updates_index(self):
         idx = self.index()

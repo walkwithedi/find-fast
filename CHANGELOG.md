@@ -4,6 +4,7 @@
 
 - Hovering a result row shows its full path, in the GTK window and on the browser page.
 - Settings in the window and on the page (the gear button beside the search box, Ctrl+, in the window): add or remove indexed folders and exclusions (a chosen folder or a name rule), index hidden entries, restore defaults. Problems (a folder that does not exist, one on a network mount, one inside another, an exclusion outside every indexed folder) are listed before saving, with Save anyway; an empty folder list cannot be saved. Saving updates the index at once: added exclusions are dropped from the index without a rescan, other changes rescan in the background.
+- Similar versions in a result are marked: files whose names differ only by copy marks, a leading number, a date, a version number or a draft word (and by case, full- or half-width forms, spaces and brackets) form a group; the newest by modification time is tagged Newest and the others Newer exists. Hovering adds the group size and the newest path; the context menu offers Go to the newest version. Results above 100,000 are not grouped (the status bar says so); large ones are grouped in the background.
 - Right-click a result: Exclude this folder (folder rows) or Exclude the containing folder (file rows), after a confirmation naming the folder.
 
 ## 0.1.0

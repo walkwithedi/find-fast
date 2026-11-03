@@ -32,6 +32,7 @@ OPEN_TIMEOUT = 120      # seconds to wait for the first page before exiting
 BYE_GRACE = 4           # seconds after the last page closed (a reload registers again meanwhile)
 RESCAN_EVERY = 300      # seconds between rescans when inotify cannot watch every folder
 ROWS_MAX = 500          # rows per request
+VERSIONS_SYNC = 5000    # results up to this size are grouped before answering, larger ones in the background
 MAX_BODY = 65536       # bytes; a settings list is the largest body
 
 MESSAGES = {
@@ -124,7 +125,7 @@ class WebState:
         self.started = time.monotonic()
         self.lock = threading.Lock()
         self.pages = {}             # page id -> last beat
-        self.results = {}           # page id -> (search id, Result)
+        self.results = {}           # page id -> (search id, Result, {'groups': VersionGroups or None})
         self.seen = False
         self.empty_since = None
         self.quit = threading.Event()
@@ -263,16 +264,37 @@ class WebState:
     def search(self, page, query, sort, desc, regex):
         res = self.index.search(query, sort, desc, regex)
         sid = secrets.token_hex(4)
+        holder = {'groups': None}
+        sync = len(res) <= VERSIONS_SYNC or len(res) > core.VERSION_GROUP_LIMIT
+        if sync:
+            holder['groups'] = core.VersionGroups(res)
         with self.lock:
-            self.results[page] = (sid, res)
+            self.results[page] = (sid, res, holder)
+        if not sync:
+            def work():
+                g = core.VersionGroups(res, stop=lambda: self.results.get(page, (None,))[0] != sid)
+                if not g.skipped:
+                    holder['groups'] = g
+            threading.Thread(target=work, name='versions', daemon=True).start()
         return sid, res
+
+    def versions_state(self, page, sid):
+        """'ready', 'pending' or 'skipped' for the grouping of a search."""
+        with self.lock:
+            got = self.results.get(page)
+        if got is None or got[0] != sid:
+            return 'skipped'
+        g = got[2]['groups']
+        if g is None:
+            return 'pending'
+        return 'too_many' if g.skipped else 'ready'
 
     def rows(self, page, sid, offset, limit):
         with self.lock:
             got = self.results.get(page)
         if got is None or got[0] != sid:
             return None
-        res = got[1]
+        res, groups = got[1], got[2]['groups']
         roots = self.index.config.resolved_roots()
         out = []
         for k in range(max(0, offset), min(len(res), offset + max(0, min(limit, ROWS_MAX)))):
@@ -283,6 +305,11 @@ class WebState:
                         'size_text': core.human_size(size), 'mtime': mtime, 'time': core.human_time(mtime),
                         'folder': size < 0,
                         'can_exclude': target not in roots and any(core.under(target, r) for r in roots)})
+            mark = groups.mark(k) if groups is not None else None
+            if mark:
+                newest = groups.newest(k)
+                out[-1].update({'ver': mark, 'ver_count': groups.size(k), 'ver_newest': newest,
+                                'ver_newest_path': core.display(res.path(newest))})
         return out
 
     def path_of(self, page, sid, k):
@@ -393,7 +420,8 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError:
                 limit = 100
             self.send_json(200, {'sid': sid, 'count': len(res), 'ms': res.ms,
-                                 'rows': st.rows(arg('page'), sid, 0, limit)})
+                                 'rows': st.rows(arg('page'), sid, 0, limit),
+                                 'versions': st.versions_state(arg('page'), sid)})
         elif url.path == '/api/settings':
             self.send_json(200, st.settings())
         elif url.path == '/api/rows':
@@ -405,7 +433,7 @@ class Handler(BaseHTTPRequestHandler):
             if rows is None:
                 self.send_json(409, {'error': msg('stale')})
             else:
-                self.send_json(200, {'rows': rows})
+                self.send_json(200, {'rows': rows, 'versions': st.versions_state(arg('page'), arg('sid'))})
         else:
             self.send_json(404, {'error': msg('not_found')})
 

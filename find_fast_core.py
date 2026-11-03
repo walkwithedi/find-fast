@@ -31,6 +31,7 @@ import struct
 import sys
 import threading
 import time
+import unicodedata
 
 log = logging.getLogger('find_fast_core')
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
@@ -1778,6 +1779,101 @@ class Watcher:
                     self.on_dirty(batch, flag)
                 except Exception:
                     log.exception('handling changes failed')
+
+
+# ---------------------------------------------------------------- similar versions
+#
+# Files whose names differ only by version marks (copies, sequence numbers, dates, version
+# numbers, draft words) are one group. The rules are listed here in one place.
+
+VERSION_GROUP_LIMIT = 100000    # results above this are not grouped
+VERSION_MIN_STEM = 2            # stems shorter than this after normalising are not grouped
+_D = r'(?:\d{8}|\d{6}|\d{4}[-./年]\d{1,2}[-./月]\d{1,2}日?)'           # a date
+_DRAFT = r'(?:初稿|二稿|三稿|终稿|定稿|修订版|修改版|最终版|最终稿|final|draft)'
+_VER = r'(?:(?:v|ver|version)\s*\d+(?:\.\d+)*|第[\d一二三四五六七八九十]+版)'
+_SEP = r'[\s_\-.,、:：·~]'
+VERSION_MARKS = [re.compile(p) for p in (
+    r'^copy of ',                                   # copy of x
+    r'\s*-?\s*(?:副本|copy)(?:\s*\(?\d+\)?)?$',     # x - 副本, x_copy, x copy 2
+    r'\s*\(\d+\)$',                                 # x(1), x (2)
+    r'^\d{1,3}' + _SEP + r'+',                      # 1 x, 02_x
+    r'^\(?' + _D + r'\)?' + _SEP + r'*',            # (20260101)x, 2026-01-01_x
+    _SEP + r'*\(?' + _D + r'\)?$',                  # x_20260101
+    r'^\(?' + _DRAFT + r'\)?' + _SEP + r'*',        # (draft)x
+    _SEP + r'*\(?' + _DRAFT + r'\)?$',              # x-终稿
+    _SEP + r'*\(?' + _VER + r'\)?$',                # x_v2, x第二版
+    r'^\(?' + _VER + r'\)?' + _SEP + r'*',          # v2 x
+)]
+_BRACKETS = str.maketrans('[]【】{}《》<>〔〕', '()()()()()()')
+_IGNORED = re.compile(r'[\s()_\-.,、:：·~]+')
+_version_keys = {}
+
+
+def version_key(name):
+    """Group key of a file name, or None when the name is not grouped (too short a stem)."""
+    key = _version_keys.get(name)
+    if key is not None or name in _version_keys:
+        return key
+    stem, ext = os.path.splitext(display(name))
+    s = unicodedata.normalize('NFKC', stem).lower().translate(_BRACKETS).strip()
+    while True:
+        before = s
+        for rx in VERSION_MARKS:
+            s = rx.sub('', s).strip()
+        if s == before:
+            break
+    s = _IGNORED.sub('', s)
+    key = (s + '\0' + unicodedata.normalize('NFKC', ext).lower()) if len(s) >= VERSION_MIN_STEM else None
+    if len(_version_keys) > 500000:
+        _version_keys.clear()
+    _version_keys[name] = key
+    return key
+
+
+class VersionGroups:
+    """Similar versions among the rows of a Result. mark(k) is 'newest', 'older' or None;
+    newest(k) is the row of the newest version in k's group; size(k) the number in it."""
+
+    def __init__(self, result, limit=None, stop=None):
+        self.skipped = len(result) > (VERSION_GROUP_LIMIT if limit is None else limit)
+        self.of = {}                # row -> group number
+        self.groups = []            # group number -> (newest row, size)
+        if self.skipped:
+            return
+        keyed = {}
+        row = result.row
+        for k in range(len(result)):
+            if stop is not None and k % 4096 == 0 and stop():
+                self.skipped = True
+                return
+            name, folder, size, mtime = row(k)
+            if size < 0:
+                continue
+            key = version_key(name)
+            if key is not None:
+                keyed.setdefault(key, []).append((k, mtime, folder, name))
+        for members in keyed.values():
+            if len(members) < 2:
+                continue
+            best = max(members, key=lambda m: (m[1], -len(os.path.join(m[2], m[3])), -m[0]))
+            g = len(self.groups)
+            self.groups.append((best[0], len(members)))
+            for m in members:
+                self.of[m[0]] = g
+
+    def mark(self, k):
+        g = self.of.get(k)
+        if g is None:
+            return None
+        return 'newest' if self.groups[g][0] == k else 'older'
+
+    def newest(self, k):
+        g = self.of.get(k)
+        return None if g is None else self.groups[g][0]
+
+    def size(self, k):
+        g = self.of.get(k)
+        return 0 if g is None else self.groups[g][1]
 
 
 # ---------------------------------------------------------------- helpers for the interfaces

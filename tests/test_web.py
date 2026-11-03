@@ -174,7 +174,9 @@ class WebTest(unittest.TestCase):
         self.assertEqual((code, out['excluded']), (200, os.path.join(self.root, 'docs', 'old')))
         self.wait_ready()
         self.assertEqual(self.search('report-2019')[1]['count'], 0)
+        self.assertTrue(self.search('notes')[1]['rows'][0]['can_exclude'])
         code, j = self.search('b.txt')
+        self.assertFalse(j['rows'][0]['can_exclude'])
         self.assertEqual(self.req('POST', '/api/exclude', {'page': 'p1', 'sid': j['sid'], 'k': 0})[0], 400)
         self.assertEqual(self.req('POST', '/api/exclude', {'page': 'p1', 'sid': 'stale', 'k': 0})[0], 409)
 
