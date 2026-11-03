@@ -171,6 +171,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
+- 0.3.1: feedback address in the READMEs; no change to the tool.
 - 0.3.0: search words also match folder names in the path (can be turned off in Settings); result columns can be reordered by dragging or in Settings; default show-or-hide shortcut Ctrl+Alt+Space, written on install.
 - 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused; the list folds away under an empty search box; shortcuts can be changed and a global show-or-hide shortcut set.
 - 0.1.0: first version.
@@ -178,3 +179,7 @@ See [CHANGELOG.md](CHANGELOG.md).
 ## Licence
 
 MIT, see [LICENSE](LICENSE).
+
+## Feedback
+
+Send suggestions and feedback to [hong.xie.me@outlook.com](mailto:hong.xie.me@outlook.com).
