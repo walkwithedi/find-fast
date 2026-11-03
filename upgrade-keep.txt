@@ -1,0 +1,2 @@
+# Files in the tool folder that an upgrade carries over to the new version, one relative path a line.
+# find-fast keeps its settings and index outside the folder (~/.config/find-fast, ~/.cache/find-fast), so the list is empty.

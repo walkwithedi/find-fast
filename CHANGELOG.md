@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.0
+
+- Upgrade in place: Settings in the window has an Upgrade section (Upgrade from a zip…, Upgrade from an unpacked folder…, Roll back to previous version), and the browser page has Upgrade beside Quit. The check shows current version → new version, the CHANGELOG entries between the two, the files kept and any extra files, and calls out a downgrade or reinstall; the confirm button reads Upgrade to vX.Y.Z. While it runs the status bar (or the page) shows the stage and the search box stays usable; afterwards the window opens again on the new version, and the page reconnects to the service restarted on the same port and token. The old folder is kept as the hidden `.find-fast.上一版` next to it; Roll back swaps the two. The path does not change, so desktop links, the menu entry written by `install.sh` and the show-or-hide shortcut keep working without reinstalling.
+- Command line: `find_fast.py --upgrade ZIP|DIR` (shows the check and asks; `--yes` skips the question) and `--rollback`.
+- A release is refused, with the reason and the folder unchanged, when its top folder is not `find-fast`, its version cannot be read, a program is missing, an entry has `..`, an absolute path, a symbolic link or a device file, it unpacks to more than 200 MB or 5000 entries, or the folder above the tool folder is not writable; a failure part-way restores the folder. An uploaded zip is written only to the system temporary folder and removed afterwards; new endpoints check the token, Host and Origin.
+- New files: `tool_upgrade.py`, an unchanged copy of the upgrade module (the version it came from is in `TOOL_UPGRADE_VERSION`; `scripts/check_repo.py` compares the copy with it and CI with the master copy), and `upgrade-keep.txt`, the files an upgrade carries over (empty: settings and the index live outside the folder). Both are in the release zip and copied by `install.sh`. walkwithedi/find-fast#19.
+
 ## 0.4.0
 
 - The launcher is renamed from `双击运行.desktop` to `秒搜文件.desktop`, matching its Name, so it can be sent to the desktop next to other tools' launchers without a name clash. Its content and the `%k` + `readlink -f` lookup are unchanged; the not-found message and the page's closing notice name the new file. A link placed on the desktop earlier stops working and has to be sent to the desktop again from the tool folder. The release zip carries the new file. walkwithedi/find-fast#18.

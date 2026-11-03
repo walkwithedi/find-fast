@@ -8,6 +8,8 @@ page when that is missing); with a query it prints matching paths, newest first.
   find_fast.py QUERY...                print matching paths
   find_fast.py --update QUERY...       rescan changed folders first
   find_fast.py --rebuild               rescan everything, then exit
+  find_fast.py --upgrade ZIP|DIR       replace this folder with a new release in place (asks first; --yes)
+  find_fast.py --rollback              swap back to the previous version kept by the last upgrade
 Query syntax: words must all appear in the name (any case); "a|b" either; "!a" not; "*" and "?"
 match a whole name; ext:pdf;docx; path:part matches the whole path (so does any word with a /);
 regex:pattern, or --regex for the whole query.
@@ -19,6 +21,8 @@ import sys
 
 import find_fast_core as core
 
+HERE = os.path.dirname(os.path.abspath(__file__))
+UPGRADE_MAIN = ('find_fast.py', 'find_fast_core.py', 'find_fast_gtk.py', 'find_fast_web.py', 'find_fast.html')
 log = logging.getLogger('find_fast')
 
 
@@ -50,6 +54,11 @@ def build_parser():
     ap.add_argument('--default-hotkey', action='store_true',
                     help='write the default global shortcut (Ctrl+Alt+Space) into the desktop settings when '
                          'none was ever set, or write the one set again with the current command (install.sh)')
+    ap.add_argument('--upgrade', metavar='ZIP|DIR',
+                    help='upgrade in place from a release zip or its unpacked folder: shows the check and asks; '
+                         'the files in upgrade-keep.txt are kept and the old version stays as the previous one')
+    ap.add_argument('--rollback', action='store_true', help='swap back to the previous version')
+    ap.add_argument('--yes', action='store_true', help='with --upgrade or --rollback: do not ask')
     ap.add_argument('--config', default=core.CONFIG_FILE, help=argparse.SUPPRESS)
     ap.add_argument('--cache', default=core.CACHE_FILE, help=argparse.SUPPRESS)
     ap.add_argument('--version', action='version', version='find-fast ' + core.VERSION)
@@ -116,6 +125,18 @@ def run_cli(args):
     return 0 if len(result) else 1
 
 
+def run_upgrade(args):
+    """--upgrade / --rollback in the terminal (tool_upgrade.py, a copy of the upgrade module)."""
+    lang = core.ui_language()
+    try:
+        import tool_upgrade
+    except ImportError:
+        print(core.text('upgrade_missing', lang), file=sys.stderr)
+        return 1
+    return tool_upgrade.cli(HERE, UPGRADE_MAIN, upgrade=args.upgrade, do_rollback=args.rollback, yes=args.yes,
+                            lang=lang)
+
+
 def run_ui(args):
     if not args.web:
         try:
@@ -146,6 +167,8 @@ def main(argv=None):
             s.reconfigure(errors='replace')
         except (AttributeError, ValueError):
             pass
+    if args.upgrade or args.rollback:
+        return run_upgrade(args)
     if args.remove_hotkey:
         import find_fast_gtk
         removed = find_fast_gtk.DesktopHotkey().remove()

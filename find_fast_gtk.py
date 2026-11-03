@@ -24,8 +24,15 @@ import urllib.parse
 
 import find_fast_core as core
 
+try:
+    import tool_upgrade
+except ImportError:     # without the upgrade module everything else still works
+    tool_upgrade = None
+
 log = logging.getLogger('find_fast_gtk')
 APP_ID = 'io.github.walkwithedi.findfast'
+TOOL_DIR = os.path.dirname(os.path.abspath(__file__))   # the folder an upgrade replaces (tests change it)
+UPGRADE_MAIN = ('find_fast.py', 'find_fast_core.py', 'find_fast_gtk.py', 'find_fast_web.py', 'find_fast.html')
 RESCAN_EVERY = 300              # seconds between rescans when inotify cannot watch every folder
 NOTICE_SECONDS = 30             # how long a start-up notice stays in the status bar
 CHANGE_THROTTLE = 1.0           # seconds between result refreshes caused by file changes
@@ -92,6 +99,22 @@ UI = {
                                  '请在系统设置的自定义快捷键里手动添加，命令填：{command}',
         'hotkey_default_failed': '设置默认唤起快捷键失败：写入系统快捷键时出错（{error}）。'
                                  '请在「设置」→「快捷键」→「唤起或隐藏窗口」里重新设置。',
+        'set_upgrade': '升级', 'upgrade_zip': '从 zip 升级……', 'upgrade_dir': '从解压好的目录升级……',
+        'rollback': '退回上一版',
+        'upgrade_hint': '新版在原位置替换，桌面链接、菜单项和唤起键不变；旧版留作上一版，可随时退回。',
+        'upgrade_now': '当前版本 {cur}，上一版 {prev}', 'upgrade_now_none': '当前版本 {cur}，还没有上一版',
+        'pick_zip': '选择新版的 zip 文件', 'pick_dir': '选择解压好的 find-fast 目录', 'zip_filter': 'zip 文件',
+        'pick': '选择', 'upgrade_title': '升级秒搜文件',
+        'upgrade_versions': '当前版本 {cur} → 新版本 {new}（{kind}）', 'upgrade_notes': '更新说明：',
+        'upgrade_keep': '会保留的文件：{files}', 'upgrade_none': '无',
+        'upgrade_extras': '多出来的文件（不带到新版，随旧目录留在上一版里，不删除）：{files}',
+        'upgrade_more': '……共 {n} 个', 'upgrade_restart_note': '升级后窗口用新版重新打开。',
+        'upgrade_refused': '不能升级：{why}。请换一个新版的 zip 或目录。',
+        'upgrade_failed_title': '升级没有完成', 'rollback_failed_title': '退回没有完成',
+        'rollback_title': '退回上一版',
+        'rollback_q': '会把当前 {cur} 换成上一版 {prev}，当前版本留作上一版，可再次退回。退回后窗口重新打开。',
+        'rollback_ok': '退回到 {prev}', 'ok': '好',
+        'upgrade_missing': '升级模块 tool_upgrade.py 缺失，请重新解压完整的工具目录',
     },
     'en': {
         'search': 'Search names and folders... (* ? wildcards, ext:pdf, path:, !not, a|b)',
@@ -162,6 +185,24 @@ UI = {
                                  'settings, with the command: {command}',
         'hotkey_default_failed': 'Setting the default show-or-hide shortcut failed: the system shortcut could not '
                                  'be written ({error}). Set it again under Settings > Shortcuts > Show or hide.',
+        'set_upgrade': 'Upgrade', 'upgrade_zip': 'Upgrade from a zip…', 'upgrade_dir': 'Upgrade from an unpacked folder…',
+        'rollback': 'Roll back to previous version',
+        'upgrade_hint': 'The new version replaces this one in place; desktop links, the menu entry and the '
+                        'show-or-hide shortcut stay as they are, and the old version is kept for rolling back.',
+        'upgrade_now': 'Current version {cur}, previous {prev}', 'upgrade_now_none': 'Current version {cur}, no previous version yet',
+        'pick_zip': 'Choose the new release zip', 'pick_dir': 'Choose the unpacked find-fast folder', 'zip_filter': 'Zip files',
+        'pick': 'Choose', 'upgrade_title': 'Upgrade find-fast',
+        'upgrade_versions': 'Current version {cur} → new version {new} ({kind})', 'upgrade_notes': 'Changes:',
+        'upgrade_keep': 'Files kept: {files}', 'upgrade_none': 'none',
+        'upgrade_extras': 'Extra files (not carried over; they stay with the previous version, nothing is deleted): {files}',
+        'upgrade_more': '… {n} in all', 'upgrade_restart_note': 'The window opens again on the new version.',
+        'upgrade_refused': 'Cannot upgrade: {why}. Choose another release zip or folder.',
+        'upgrade_failed_title': 'The upgrade did not finish', 'rollback_failed_title': 'The roll-back did not finish',
+        'rollback_title': 'Roll back to previous version',
+        'rollback_q': 'The current {cur} is replaced by the previous {prev}; the current version becomes the '
+                      'previous one, so this can be undone. The window opens again afterwards.',
+        'rollback_ok': 'Roll back to {prev}', 'ok': 'OK',
+        'upgrade_missing': 'The upgrade module tool_upgrade.py is missing; unpack the whole tool folder again',
     },
 }
 COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime'),
@@ -623,6 +664,7 @@ class Window:
         self.stop = threading.Event()
         self.worker = None
         self.message = None             # (text, kind) shown instead of the result count
+        self.upgrading = False          # an upgrade or roll-back is being checked, asked or run
         self.query = None               # text of the last search
         self.versions = None            # core.VersionGroups of the result, once worked out
         self.keys = load_keys(index.config)
@@ -1053,6 +1095,132 @@ class Window:
 
         d.connect('response', answer)
         d.show_all()
+
+    # ------------------------------------------------------------ upgrade in place
+
+    def alert(self, text, detail):
+        """An error dialog with one button. Tests replace this."""
+        d = Gtk.MessageDialog(transient_for=self.win, modal=True, message_type=Gtk.MessageType.ERROR,
+                              buttons=Gtk.ButtonsType.NONE, text=text)
+        d.format_secondary_text(detail)
+        d.add_button(t(self.lang, 'ok'), Gtk.ResponseType.OK)
+        d.connect('response', lambda dialog, _r: dialog.destroy())
+        d.show_all()
+
+    def upgrade_report(self, rep):
+        lang = self.lang
+
+        def files(items, total):
+            if not items:
+                return t(lang, 'upgrade_none')
+            text = '、'.join(items[:12]) if lang == 'zh' else ', '.join(items[:12])
+            return text + (t(lang, 'upgrade_more', n=total) if total > 12 else '')
+        lines = [t(lang, 'upgrade_versions', cur=rep['current'], new=rep['new'], kind=rep['kind_text'])]
+        if rep['warning']:
+            lines += ['', rep['warning']]
+        if rep['notes']:
+            lines += ['', t(lang, 'upgrade_notes')]
+            for n in rep['notes'][:10]:
+                lines += ['%s: %s' % (n['version'], n['text'][:600])]
+        lines += ['', t(lang, 'upgrade_keep', files=files(rep['keep'], len(rep['keep']))),
+                  t(lang, 'upgrade_extras', files=files(rep['extras'], rep['extras_total'])),
+                  '', t(lang, 'upgrade_restart_note')]
+        return '\n'.join(lines)
+
+    def set_upgrading(self, on):
+        self.upgrading = on
+        if self.settings is not None:
+            self.settings.refill_upgrade()
+
+    def upgrade_stage(self, key):
+        """Called from the worker thread with a stage key of the upgrade module."""
+        GLib.idle_add(self.show_message, tool_upgrade.text(self.lang, key), 'info', None)
+
+    def upgrade_from(self, path):
+        """Check the chosen release in the background, then ask; the search box stays usable."""
+        if self.upgrading or tool_upgrade is None:
+            return
+        self.set_upgrading(True)
+        self.upgrade_stage('stage_check')
+
+        def work():
+            rep = tool_upgrade.inspect(TOOL_DIR, path, UPGRADE_MAIN, self.lang)
+            GLib.idle_add(self.confirm_upgrade, rep, path)
+        threading.Thread(target=work, daemon=True).start()
+
+    def confirm_upgrade(self, rep, path):
+        lang = self.lang
+        if not rep['ok']:
+            self.set_upgrading(False)
+            why = t(lang, 'upgrade_refused', why=('；' if lang == 'zh' else '; ').join(rep['errors']))
+            self.show_message(why, 'bad', 10)
+            self.alert(t(lang, 'upgrade_title'), why)
+            return False
+        self.message = None
+        self.update_status()
+
+        def answer(ok):
+            if not ok:
+                self.set_upgrading(False)
+                return
+            threading.Thread(target=self.run_upgrade, args=(path,), daemon=True).start()
+        self.confirm(t(lang, 'upgrade_title'), self.upgrade_report(rep), rep['confirm'], answer)
+        return False
+
+    def run_upgrade(self, path):
+        try:
+            res = tool_upgrade.apply(TOOL_DIR, path, UPGRADE_MAIN, self.lang, progress=self.upgrade_stage)
+        except tool_upgrade.UpgradeError as e:
+            GLib.idle_add(self.upgrade_failed, 'upgrade_failed_title', tool_upgrade.sentence(e.message(self.lang), self.lang))
+            return
+        GLib.idle_add(self.upgrade_done, res['message'])
+
+    def ask_rollback(self):
+        if self.upgrading or tool_upgrade is None:
+            return
+        info = tool_upgrade.rollback_info(TOOL_DIR)
+        if not info['available']:
+            return
+        self.set_upgrading(True)
+
+        def answer(ok):
+            if not ok:
+                self.set_upgrading(False)
+                return
+
+            def work():
+                try:
+                    res = tool_upgrade.rollback(TOOL_DIR, self.lang, progress=self.upgrade_stage)
+                except tool_upgrade.UpgradeError as e:
+                    GLib.idle_add(self.upgrade_failed, 'rollback_failed_title',
+                                  tool_upgrade.sentence(e.message(self.lang), self.lang))
+                    return
+                GLib.idle_add(self.upgrade_done, res['message'])
+            threading.Thread(target=work, daemon=True).start()
+        self.confirm(t(self.lang, 'rollback_title'), t(self.lang, 'rollback_q', cur=info['current'], prev=info['previous']),
+                     t(self.lang, 'rollback_ok', prev=info['previous']), answer)
+
+    def upgrade_failed(self, title_key, why):
+        self.set_upgrading(False)
+        self.show_message(why, 'bad', 15)
+        self.alert(t(self.lang, title_key), why)
+        return False
+
+    def upgrade_done(self, message):
+        """The folder now holds the other version: close and let main() start it again."""
+        self.show_message(message + ' ' + tool_upgrade.text(self.lang, 'restarting'), 'ok', None)
+        self.app.restart_after_upgrade = True
+        GLib.timeout_add(600, self.restart_now)
+        return False
+
+    def restart_now(self):
+        self.save_ui_state()
+        self.stop.set()
+        if self.settings is not None:
+            self.settings.dialog.destroy()
+        self.win.hide()
+        self.quit()
+        return False
 
     def on_index_change(self):
         """From any thread: the index or its progress changed."""
@@ -1867,13 +2035,74 @@ class SettingsDialog:
         self.copy_command.set_no_show_all(True)
         row.pack_start(self.copy_command, False, False, 0)
         area.pack_start(row, False, False, 0)
+        area.pack_start(self.heading(t(lang, 'set_upgrade')), False, False, 0)
+        hint = Gtk.Label(label=t(lang, 'upgrade_hint'), xalign=0)
+        hint.set_line_wrap(True)
+        hint.get_style_context().add_class('dim-label')
+        area.pack_start(hint, False, False, 0)
+        self.upgrade_state = Gtk.Label(xalign=0)
+        self.upgrade_state.set_line_wrap(True)
+        area.pack_start(self.upgrade_state, False, False, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.upgrade_buttons = []
+        for label, how in (('upgrade_zip', 'zip'), ('upgrade_dir', 'dir'), ('rollback', 'rollback')):
+            b = Gtk.Button(label=t(lang, label))
+            b.connect('clicked', lambda _b, h=how: self.upgrade(h))
+            row.pack_start(b, False, False, 0)
+            self.upgrade_buttons.append(b)
+        self.rollback_button = self.upgrade_buttons[2]
+        area.pack_start(row, False, False, 0)
         self.problems = Gtk.Label(xalign=0)
         self.problems.set_line_wrap(True)
         self.problems.set_selectable(True)
         area.pack_start(self.problems, False, False, 0)
+        self.refill_upgrade()
         self.refill()
         self.refill_columns()
         self.refill_keys()
+
+    def refill_upgrade(self):
+        """Versions under Upgrade; the buttons are off while an upgrade runs or without the module."""
+        lang = self.lang
+        busy = self.window.upgrading
+        if tool_upgrade is None:
+            self.upgrade_state.set_text(t(lang, 'upgrade_missing'))
+            for b in self.upgrade_buttons:
+                b.set_sensitive(False)
+            return
+        info = tool_upgrade.rollback_info(TOOL_DIR)
+        cur = info['current'] or 'v' + core.VERSION
+        self.upgrade_state.set_text(t(lang, 'upgrade_now', cur=cur, prev=info['previous']) if info['available']
+                                    else t(lang, 'upgrade_now_none', cur=cur))
+        for b in self.upgrade_buttons[:2]:
+            b.set_sensitive(not busy)
+        self.rollback_button.set_sensitive(info['available'] and not busy)
+
+    def upgrade(self, how):
+        if how == 'rollback':
+            self.window.ask_rollback()
+            return
+        path = self.choose_upgrade(how)
+        if path:
+            self.window.upgrade_from(path)
+
+    def choose_upgrade(self, how):
+        """A file chooser for the release zip or its unpacked folder; returns the path or None. Tests replace this."""
+        lang = self.lang
+        action = Gtk.FileChooserAction.SELECT_FOLDER if how == 'dir' else Gtk.FileChooserAction.OPEN
+        d = Gtk.FileChooserDialog(title=t(lang, 'pick_dir' if how == 'dir' else 'pick_zip'),
+                                  transient_for=self.dialog, action=action, modal=True)
+        d.add_button(t(lang, 'cancel'), Gtk.ResponseType.CANCEL)
+        d.add_button(t(lang, 'pick'), Gtk.ResponseType.OK)
+        if how == 'zip':
+            f = Gtk.FileFilter()
+            f.set_name(t(lang, 'zip_filter'))
+            f.add_pattern('*.zip')
+            f.add_pattern('*.ZIP')
+            d.add_filter(f)
+        path = d.get_filename() if d.run() == Gtk.ResponseType.OK else None
+        d.destroy()
+        return path
 
     @staticmethod
     def heading(text):
@@ -2203,7 +2432,40 @@ def main(args=None):
                 conn.flush_sync(None)
             return 0
     holder['notice'] = ensure_default_toggle(config)
-    return app.run(sys.argv[:1])
+    if tool_upgrade and tool_upgrade.resumed() is not None:
+        wait_for_name(APP_ID)
+    rc = app.run(sys.argv[:1])
+    if getattr(app, 'restart_after_upgrade', False):
+        argv = ['--gtk', '--log-level', logging.getLevelName(logging.getLogger().level)]
+        for opt, default in (('config', core.CONFIG_FILE), ('cache', core.CACHE_FILE)):
+            value = getattr(args, opt, default)
+            if value != default:
+                argv += ['--' + opt, value]
+        tool_upgrade.restart(os.path.join(TOOL_DIR, 'find_fast.py'), argv, {'gtk': True})
+    return rc
+
+
+def wait_for_name(name, timeout=5.0):
+    """After an upgrade the old process has just left the session bus: wait until its name is free,
+    so this start opens a window instead of handing over to a process that is gone."""
+    try:
+        bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+    except GLib.Error as e:
+        log.debug('no session bus: %s', e)
+        return
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            owned = bus.call_sync('org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus',
+                                  'NameHasOwner', GLib.Variant('(s)', (name,)), GLib.VariantType('(b)'),
+                                  Gio.DBusCallFlags.NONE, 1000, None).unpack()[0]
+        except GLib.Error as e:
+            log.debug('NameHasOwner: %s', e)
+            return
+        if not owned:
+            return
+        time.sleep(0.1)
+    log.warning('%s still owned after %.0f s', name, timeout)
 
 
 if __name__ == '__main__':

@@ -12,7 +12,8 @@ DATA="${XDG_DATA_HOME:-$HOME/.local/share}"
 DEST="$DATA/find-fast"
 BIN="$HOME/.local/bin"
 MENU="$DATA/applications/find-fast.desktop"
-FILES=(find_fast.py find_fast_core.py find_fast_gtk.py find_fast_web.py find_fast.html VERSION LICENSE
+FILES=(find_fast.py find_fast_core.py find_fast_gtk.py find_fast_web.py find_fast.html tool_upgrade.py upgrade-keep.txt
+       TOOL_UPGRADE_VERSION VERSION LICENSE
        README.md README.zh-CN.md CHANGELOG.md)
 
 zh() { case "${LC_ALL:-${LC_MESSAGES:-${LANGUAGE:-${LANG:-}}}}" in zh*) return 0 ;; *) return 1 ;; esac; }
