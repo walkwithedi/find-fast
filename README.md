@@ -64,16 +64,17 @@ Folders appear in the results as well.
 
 - Type to search; ↓ moves into the list and ↑ on the first row back to the box; typing in the list continues in the box.
 - ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter opens the containing folder, with the item selected where the file manager supports it; Ctrl+C copies the path.
-- Right click or the Menu key (Shift+F10): open, open containing folder, copy path, rescan.
+- Right click or the Menu key (Shift+F10): open, open containing folder, copy path, Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first and names the folder; the item is not shown when that folder is an indexed folder itself.
 - Click a column header to sort by name, path, size or modification time; click again to reverse. Newest first by default.
 - Hovering a result row shows its full path.
+- The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
 - F5 or Ctrl+R rescans; Esc clears the box, and a second Esc closes the window.
 - The status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
 
 ### Browser page
 
-Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next; hovering a row shows its full path), open, open containing folder, copy path, rescan and quit.
+Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next; hovering a row shows its full path), open, open containing folder, copy path, rescan, settings (the gear button), a context menu with exclusion, and quit. On the page, Add folder... opens zenity's folder chooser; without zenity the path is typed instead.
 
 The server listens on a random port of 127.0.0.1 only, and its address carries a token made at start. It exits a few seconds after the last page closes (a reload does not count), at once on Quit, and after 120 seconds when no page ever opened; a page left in a background tab does not count as closed. `--no-browser` only prints the address.
 
@@ -96,7 +97,18 @@ The exit code is 1 when nothing matches and 2 for an invalid query.
 
 By default the home folder and local disks mounted under `/media` and `/mnt`. Network mounts (nfs, cifs/smb, sshfs and other FUSE file systems except local ones such as ntfs-3g and exfat) and pseudo file systems such as `/proc` and `/sys` are skipped, and symbolic links to folders are not followed.
 
-Settings live in `~/.config/find-fast/config.json`; defaults apply without it:
+The gear button beside the search box (or Ctrl+, in the window) opens Settings:
+
+- Indexed folders: remove any; Add folder... picks one in the system folder chooser.
+- Excluded: remove any; Add folder... excludes a chosen folder by path, or type a name rule (such as `node_modules` or `*.tmp`) and choose Add.
+- Index hidden files and folders: a switch.
+- Restore defaults puts the default values in the panel; nothing is written until Save.
+
+Saving checks first: an empty folder list cannot be saved; a folder that does not exist, one on a network mount, one inside another indexed folder, or an exclusion outside every indexed folder is listed with the reason, and Save anyway saves regardless. The same folder written two ways counts once, and folders under home are written as `~/...`.
+
+The index is updated in the background right after saving, and searching goes on meanwhile: when exclusions were only added, matching entries are dropped from the index without a rescan; other changes rescan (turning hidden entries on or removing an exclusion lists every folder again). Saving during a scan stops it and starts over with the new settings.
+
+Settings live in `~/.config/find-fast/config.json`, which can also be edited by hand; defaults apply without it:
 
 ```json
 {
@@ -110,7 +122,7 @@ Settings live in `~/.config/find-fast/config.json`; defaults apply without it:
 - `exclude`: entries without `/` exclude by name (wildcards `*` `?` allowed); entries with `/` or starting with `~` exclude a whole folder by path.
 - `hidden`: also index names that start with a dot.
 
-After a change of settings the next start rescans everything.
+After the file is edited by hand, the next start rescans everything.
 
 The index is `~/.cache/find-fast/index.bin`, mode 600. Sizes and times are updated when their folder changes: live through inotify while the window is open, and at the next start for changes made while it was closed. When there are more folders than the system inotify limit (`/proc/sys/fs/inotify/max_user_watches`), the rest are rescanned every 5 minutes and the status bar says so.
 
@@ -126,7 +138,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
-- 0.2.0: hovering a result shows its full path.
+- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu.
 - 0.1.0: first version.
 
 ## Licence

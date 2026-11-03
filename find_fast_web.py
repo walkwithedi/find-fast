@@ -32,7 +32,7 @@ OPEN_TIMEOUT = 120      # seconds to wait for the first page before exiting
 BYE_GRACE = 4           # seconds after the last page closed (a reload registers again meanwhile)
 RESCAN_EVERY = 300      # seconds between rescans when inotify cannot watch every folder
 ROWS_MAX = 500          # rows per request
-MAX_BODY = 4096
+MAX_BODY = 65536       # bytes; a settings list is the largest body
 
 MESSAGES = {
     'zh': {
@@ -41,8 +41,12 @@ MESSAGES = {
         'no_browser': '未能自动打开浏览器，请在浏览器中打开：{url}',
         'denied': '拒绝访问',
         'not_found': '没有这个地址',
+        'bad_request': '请求内容不完整',
         'stale': '结果已过期，请重新搜索',
         'gone': '文件已不存在',
+        'choose_folder': '选择文件夹',
+        'save_failed': '保存失败：{error}。请检查设置文件夹是否可写。',
+        'cannot_exclude': '这个文件夹就是索引的文件夹，不能排除；请在「设置」里删除它。',
     },
     'en': {
         'no_gi': 'python3-gi (GTK 3) was not found, so the browser page is used. Install python3-gi for the window.',
@@ -50,8 +54,12 @@ MESSAGES = {
         'no_browser': 'Could not open a browser; open this address in one: {url}',
         'denied': 'Access denied',
         'not_found': 'No such address',
+        'bad_request': 'Incomplete request',
         'stale': 'The result is out of date; search again',
         'gone': 'The file no longer exists',
+        'choose_folder': 'Choose a folder',
+        'save_failed': 'Save failed: {error}. Check that the settings folder is writable.',
+        'cannot_exclude': 'This is an indexed folder itself and cannot be excluded; remove it in Settings.',
     },
 }
 
@@ -177,6 +185,81 @@ class WebState:
         threading.Thread(target=self.index.refresh_and_watch, kwargs={'stop': self.stop}, daemon=True).start()
         return True
 
+    # settings
+
+    def settings(self):
+        c = self.index.config
+        return {'roots': c.roots, 'exclude': c.exclude, 'hidden': c.hidden,
+                'defaults': {'roots': core.DEFAULT_ROOTS, 'exclude': core.DEFAULT_EXCLUDE, 'hidden': False},
+                'can_pick': bool(shutil.which('zenity'))}
+
+    def save_settings(self, roots, exclude, hidden, force=False):
+        """{'saved': True} or {'saved': False, 'problems': [...], 'blocked': bool}."""
+        roots, exclude = core.tidy_scope(roots, exclude)
+        problems = core.check_scope(roots, exclude, self.index.mounts)
+        blocked = any(code == 'no_roots' for _, _, code in problems)
+        if blocked or (problems and not force):
+            lang = core.ui_language()
+            return {'saved': False, 'blocked': blocked,
+                    'problems': [core.scope_problem_text(item, code, lang) for _, item, code in problems]}
+        c = self.index.config
+        self.apply_scope(c.with_scope(roots, exclude, hidden))
+        return {'saved': True}
+
+    def exclude(self, page, sid, k):
+        """Exclude the folder of result row k (the row itself when it is a folder)."""
+        with self.lock:
+            got = self.results.get(page)
+        if got is None or got[0] != sid or not 0 <= k < len(got[1]):
+            return None
+        name, folder, size, _ = got[1].row(k)
+        target = os.path.join(folder, name) if size < 0 else folder
+        roots = self.index.config.resolved_roots()
+        if target in roots or not any(core.under(target, r) for r in roots):
+            return ''
+        c = self.index.config
+        r, e = core.tidy_scope(c.roots, c.exclude + [core.to_tilde(target)])
+        self.apply_scope(c.with_scope(r, e, c.hidden))
+        return target
+
+    def apply_scope(self, config):
+        """Save the settings, stop a scan in progress, then use them in the background. Raises
+        OSError when the settings cannot be written."""
+        config.save()
+        with self.lock:
+            self.stop.set()
+            old, stop = self.worker, threading.Event()
+            self.stop = stop
+
+        def run():
+            if old is not None:
+                old.join()
+            if stop.is_set():
+                return
+            mode = self.index.reconfigure(config, stop=stop)
+            if mode != 'stopped' and self.index.watcher is None:
+                self.index.start_watching()
+        self.worker = self.applying = threading.Thread(target=run, name='index', daemon=True)
+        self.worker.start()
+
+    def is_applying(self):
+        t = getattr(self, 'applying', None)
+        return t is not None and t.is_alive()
+
+    def pick_folder(self, title):
+        """A folder chosen in zenity's folder chooser: (path or None, available)."""
+        if not shutil.which('zenity'):
+            return None, False
+        try:
+            p = subprocess.run(['zenity', '--file-selection', '--directory', '--title=' + title,
+                                '--filename=' + core.HOME + '/'],
+                               stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=600)
+        except (OSError, subprocess.TimeoutExpired) as e:
+            log.info('zenity failed: %s', e)
+            return None, True
+        path = p.stdout.strip()
+        return (path if p.returncode == 0 and path else None), True
+
     def search(self, page, query, sort, desc, regex):
         res = self.index.search(query, sort, desc, regex)
         sid = secrets.token_hex(4)
@@ -190,13 +273,16 @@ class WebState:
         if got is None or got[0] != sid:
             return None
         res = got[1]
+        roots = self.index.config.resolved_roots()
         out = []
         for k in range(max(0, offset), min(len(res), offset + max(0, min(limit, ROWS_MAX)))):
             name, folder, size, mtime = res.row(k)
+            target = os.path.join(folder, name) if size < 0 else folder
             out.append({'k': k, 'name': core.display(name), 'dir': core.display(folder),
                         'path': core.display(os.path.join(folder, name)), 'size': size,
                         'size_text': core.human_size(size), 'mtime': mtime, 'time': core.human_time(mtime),
-                        'folder': size < 0})
+                        'folder': size < 0,
+                        'can_exclude': target not in roots and any(core.under(target, r) for r in roots)})
         return out
 
     def path_of(self, page, sid, k):
@@ -293,6 +379,7 @@ class Handler(BaseHTTPRequestHandler):
         elif url.path == '/api/status':
             status = st.index.status()
             status['lang'] = core.ui_language()
+            status['applying'] = st.is_applying()
             self.send_json(200, status)
         elif url.path == '/api/search':
             try:
@@ -307,6 +394,8 @@ class Handler(BaseHTTPRequestHandler):
                 limit = 100
             self.send_json(200, {'sid': sid, 'count': len(res), 'ms': res.ms,
                                  'rows': st.rows(arg('page'), sid, 0, limit)})
+        elif url.path == '/api/settings':
+            self.send_json(200, st.settings())
         elif url.path == '/api/rows':
             try:
                 offset, limit = int(arg('offset', '0')), int(arg('limit', '100'))
@@ -356,6 +445,38 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(500, {'error': str(e)})
                 return
             self.send_json(200, {'ok': True})
+        elif url.path == '/api/settings':
+            roots, exclude = data.get('roots'), data.get('exclude')
+            if not isinstance(roots, list) or not isinstance(exclude, list):
+                self.send_json(400, {'error': msg('bad_request')})
+                return
+            try:
+                out = st.save_settings([r for r in roots if isinstance(r, str)],
+                                       [e for e in exclude if isinstance(e, str)],
+                                       bool(data.get('hidden')), bool(data.get('force')))
+            except OSError as e:
+                self.send_json(500, {'error': msg('save_failed', error=e.strerror or e)})
+                return
+            self.send_json(200, out)
+        elif url.path == '/api/pick_folder':
+            path, available = st.pick_folder(msg('choose_folder'))
+            self.send_json(200, {'path': path, 'available': available})
+        elif url.path == '/api/exclude':
+            try:
+                k = int(data.get('k'))
+            except (TypeError, ValueError):
+                k = -1
+            try:
+                target = st.exclude(str(data.get('page')), str(data.get('sid')), k)
+            except OSError as e:
+                self.send_json(500, {'error': msg('save_failed', error=e.strerror or e)})
+                return
+            if target is None:
+                self.send_json(409, {'error': msg('stale')})
+            elif not target:
+                self.send_json(400, {'error': msg('cannot_exclude')})
+            else:
+                self.send_json(200, {'excluded': core.display(target)})
         elif url.path == '/api/rescan':
             self.send_json(200, {'started': st.rescan()})
         elif url.path == '/api/quit':

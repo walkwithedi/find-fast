@@ -39,6 +39,18 @@ UI = {
         'open_failed': '打开失败：{error}。请检查文件是否还在，或用文件管理器打开。',
         'gone': '打开失败：文件已不存在。索引将在下次扫描时更新。',
         'unreadable': '{count} 个文件夹无法读取',
+        'settings': '设置', 'set_roots': '索引的文件夹', 'set_exclude': '排除',
+        'set_exclude_hint': '名称规则，如 node_modules、*.tmp', 'set_hidden': '索引隐藏文件和文件夹',
+        'add_folder': '添加文件夹……', 'add': '添加', 'remove': '删除', 'remove_item': '删除 {item}',
+        'defaults': '恢复默认', 'cancel': '取消', 'save': '保存', 'save_anyway': '仍然保存',
+        'set_blocked': '保存失败：{reason}。请先添加一个文件夹。',
+        'set_warn': '保存前请确认以下几项，确认无误后点「仍然保存」：',
+        'choose_folder': '选择文件夹',
+        'exclude_this': '排除此文件夹', 'exclude_parent': '排除所在文件夹',
+        'exclude_q': '排除 {path}？', 'exclude_btn': '排除',
+        'exclude_detail': '这个文件夹及其中的全部条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
+        'applying': '正在按新设置更新索引……', 'applied': '已按新设置更新索引',
+        'save_failed': '保存失败：{error}。请检查设置文件夹是否可写。',
     },
     'en': {
         'search': 'Search file names... (* ? wildcards, ext:pdf, path:, !not, a|b)',
@@ -55,6 +67,19 @@ UI = {
         'open_failed': 'Open failed: {error}. Check that the file still exists, or open it from a file manager.',
         'gone': 'Open failed: the file no longer exists. The index is updated at the next scan.',
         'unreadable': '{count} folders unreadable',
+        'settings': 'Settings', 'set_roots': 'Indexed folders', 'set_exclude': 'Excluded',
+        'set_exclude_hint': 'Name rule, such as node_modules or *.tmp', 'set_hidden': 'Index hidden files and folders',
+        'add_folder': 'Add folder...', 'add': 'Add', 'remove': 'Remove', 'remove_item': 'Remove {item}',
+        'defaults': 'Restore defaults', 'cancel': 'Cancel', 'save': 'Save', 'save_anyway': 'Save anyway',
+        'set_blocked': 'Save failed: {reason}. Add a folder first.',
+        'set_warn': 'Check these before saving; if they are as intended, choose Save anyway:',
+        'choose_folder': 'Choose a folder',
+        'exclude_this': 'Exclude this folder', 'exclude_parent': 'Exclude the containing folder',
+        'exclude_q': 'Exclude {path}?', 'exclude_btn': 'Exclude',
+        'exclude_detail': 'The folder and everything in it are removed from the index and no longer indexed. '
+                          'Remove the rule under Excluded in Settings to undo this.',
+        'applying': 'Updating the index for the new settings...', 'applied': 'Index updated for the new settings',
+        'save_failed': 'Save failed: {error}. Check that the settings folder is writable.',
     },
 }
 COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime')]
@@ -135,16 +160,25 @@ class Window:
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         w.add(box)
 
+        top = self.top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        top.set_margin_start(8)
+        top.set_margin_end(8)
+        top.set_margin_top(8)
+        top.set_margin_bottom(6)
         self.entry = Gtk.SearchEntry()
         self.entry.set_placeholder_text(t(self.lang, 'search'))
-        self.entry.set_margin_start(8)
-        self.entry.set_margin_end(8)
-        self.entry.set_margin_top(8)
-        self.entry.set_margin_bottom(6)
         self.entry.connect('search-changed', self.on_search_changed)
         self.entry.connect('key-press-event', self.on_entry_key)
         self.entry.connect('activate', lambda *_: self.open_current())
-        box.pack_start(self.entry, False, False, 0)
+        top.pack_start(self.entry, True, True, 0)
+        self.gear = Gtk.Button.new_from_icon_name('preferences-system-symbolic', Gtk.IconSize.BUTTON)
+        self.gear.set_relief(Gtk.ReliefStyle.NONE)
+        self.gear.set_tooltip_text(t(self.lang, 'settings'))
+        self.gear.get_accessible().set_name(t(self.lang, 'settings'))
+        self.gear.connect('clicked', lambda *_: self.open_settings())
+        top.pack_start(self.gear, False, False, 0)
+        box.pack_start(top, False, False, 0)
+        self.settings = None            # the open settings dialog
 
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(row, True, True, 0)
@@ -229,6 +263,9 @@ class Window:
             item.connect('activate', lambda _i, f=cb: f())
             self.menu.append(item)
         self.menu.append(Gtk.SeparatorMenuItem())
+        self.exclude_item = Gtk.MenuItem(label=t(self.lang, 'exclude_parent'))
+        self.exclude_item.connect('activate', lambda *_: self.exclude_current())
+        self.menu.append(self.exclude_item)
         item = Gtk.MenuItem(label=t(self.lang, 'rescan'))
         item.connect('activate', lambda *_: self.start_refresh())
         self.menu.append(item)
@@ -243,6 +280,8 @@ class Window:
             accel.connect(k, mods, 0, lambda *_: (self.start_refresh(), True)[1])
         k, mods = Gtk.accelerator_parse('<Control>l')
         accel.connect(k, mods, 0, lambda *_: (self.entry.grab_focus(), True)[1])
+        k, mods = Gtk.accelerator_parse('<Control>comma')
+        accel.connect(k, mods, 0, lambda *_: (self.open_settings(), True)[1])
         self.update_sort_indicators()
         w.show_all()
         self.entry.grab_focus()
@@ -253,16 +292,16 @@ class Window:
         """Load the cache in the background, then rescan and watch."""
         self.index.on_change = self.on_index_change
         self.set_state(t(self.lang, 'loading'))
-        self.worker = threading.Thread(target=self._load_and_refresh, name='index', daemon=True)
+        self.worker = threading.Thread(target=self._load_and_refresh, args=(self.stop,), name='index', daemon=True)
         self.worker.start()
 
-    def _load_and_refresh(self):
+    def _load_and_refresh(self, stop):
         loaded = self.index.load()
         GLib.idle_add(self.after_load, loaded)
-        if self.stop.is_set():
+        if stop.is_set():
             return
-        self.index.refresh(stop=self.stop)
-        if self.stop.is_set():
+        self.index.refresh(stop=stop)
+        if stop.is_set():
             return
         watching = self.index.start_watching()
         GLib.idle_add(self.after_refresh, watching)
@@ -292,12 +331,110 @@ class Window:
     def start_refresh(self):
         if self.worker is not None and self.worker.is_alive():
             return
-        self.worker = threading.Thread(target=self._refresh, name='index', daemon=True)
+        self.worker = threading.Thread(target=self._refresh, args=(self.stop,), name='index', daemon=True)
         self.worker.start()
 
-    def _refresh(self):
-        self.index.refresh_and_watch(stop=self.stop)
+    def _refresh(self, stop):
+        self.index.refresh_and_watch(stop=stop)
         GLib.idle_add(self.after_change)
+
+    # ------------------------------------------------------------ settings
+
+    def open_settings(self):
+        if self.settings is not None:
+            self.settings.dialog.present()
+            return self.settings
+        self.settings = SettingsDialog(self, self.index.config, self.index.mounts)
+        self.settings.dialog.connect('destroy', lambda *_: setattr(self, 'settings', None))
+        self.settings.dialog.show_all()
+        self.settings.update_problems([])
+        return self.settings
+
+    def apply_scope(self, config):
+        """Save a new index scope and use it: a scan in progress is stopped first."""
+        try:
+            config.save()
+        except OSError as e:
+            log.warning('cannot save %s: %s', config.path, e)
+            self.show_message(t(self.lang, 'save_failed', error=e.strerror or e), 'bad')
+            return False
+        self.pending_scope = config
+        self.stop.set()
+        self.show_message(t(self.lang, 'applying'), 'info', seconds=None)
+        self._start_pending()
+        return True
+
+    def _start_pending(self):
+        if self.closed or getattr(self, 'pending_scope', None) is None:
+            return False
+        if self.worker is not None and self.worker.is_alive():
+            GLib.timeout_add(100, self._start_pending)
+            return False
+        config, self.pending_scope = self.pending_scope, None
+        self.stop = threading.Event()
+        self.worker = threading.Thread(target=self._reconfigure, args=(config, self.stop), name='index', daemon=True)
+        self.worker.start()
+        return False
+
+    def _reconfigure(self, config, stop):
+        mode = self.index.reconfigure(config, stop=stop)
+        if mode != 'stopped' and self.index.watcher is None:
+            self.index.start_watching()
+        GLib.idle_add(self.after_reconfigure, mode)
+
+    def after_reconfigure(self, mode):
+        if self.closed:
+            return False
+        self.update_state()
+        self.run_search(keep=True)
+        if mode != 'stopped':
+            self.show_message(t(self.lang, 'applied'), 'ok')
+        return False
+
+    def exclude_target(self):
+        """The folder that 'exclude' would add for the selected row, or None when it is an
+        indexed folder itself (or outside them)."""
+        if self.result is None or not 0 <= self.cur < self.count():
+            return None, False
+        name, folder, size, _ = self.result.row(self.cur)
+        is_dir = size < 0
+        target = os.path.join(folder, name) if is_dir else folder
+        roots = self.index.config.resolved_roots()
+        if target in roots or not any(core.under(target, r) for r in roots):
+            return None, is_dir
+        return target, is_dir
+
+    def exclude_current(self):
+        target, _ = self.exclude_target()
+        if target is None:
+            return
+        shown = core.display(target)
+
+        def done(ok):
+            if not ok:
+                return
+            c = self.index.config
+            roots, exclude = core.tidy_scope(c.roots, c.exclude + [core.to_tilde(target)])
+            self.apply_scope(c.with_scope(roots, exclude, c.hidden))
+
+        self.confirm(t(self.lang, 'exclude_q', path=shown), t(self.lang, 'exclude_detail'),
+                     t(self.lang, 'exclude_btn'), done)
+
+    def confirm(self, text, detail, ok_label, callback):
+        """Ask with a modal dialog; callback(True) when ok_label was chosen. Tests replace this."""
+        d = Gtk.MessageDialog(transient_for=self.win, modal=True, message_type=Gtk.MessageType.QUESTION,
+                              buttons=Gtk.ButtonsType.NONE, text=text)
+        d.format_secondary_text(detail)
+        d.add_button(t(self.lang, 'cancel'), Gtk.ResponseType.CANCEL)
+        d.add_button(ok_label, Gtk.ResponseType.OK)
+        d.set_default_response(Gtk.ResponseType.CANCEL)
+
+        def answer(dialog, response):
+            dialog.destroy()
+            callback(response == Gtk.ResponseType.OK)
+
+        d.connect('response', answer)
+        d.show_all()
 
     def on_index_change(self):
         """From any thread: the index or its progress changed."""
@@ -600,6 +737,9 @@ class Window:
     def popup_menu(self, event):
         if self.cur < 0:
             return
+        target, is_dir = self.exclude_target()
+        self.exclude_item.set_label(t(self.lang, 'exclude_this' if is_dir else 'exclude_parent'))
+        self.exclude_item.set_visible(target is not None)
         if event is not None:
             self.menu.popup_at_pointer(event)
         else:
@@ -673,10 +813,12 @@ class Window:
 
     # ------------------------------------------------------------ status
 
-    def show_message(self, text, kind):
+    def show_message(self, text, kind, seconds=4):
+        """Show text instead of the result count; seconds=None keeps it until the next message."""
         self.message = (text, kind)
         self.update_status()
-        GLib.timeout_add_seconds(4, self._clear_message, text)
+        if seconds is not None:
+            GLib.timeout_add_seconds(seconds, self._clear_message, text)
 
     def _clear_message(self, text):
         if self.message is not None and self.message[0] == text:
@@ -718,6 +860,203 @@ class Window:
         parts.append('v' + core.VERSION)
         self.set_state(' · '.join(parts))
         return False
+
+
+class SettingsDialog:
+    """Index scope: folders to index, exclusions, hidden entries. Edits stay in the dialog until
+    Save; problems are listed first and Save anyway saves regardless (an empty folder list
+    cannot be saved)."""
+
+    RESTORE, ANYWAY = 1, 2
+
+    def __init__(self, window, config, mounts=None):
+        self.window = window
+        self.lang = window.lang
+        self.config = config
+        self.mounts = mounts
+        self.roots = list(config.roots)
+        self.exclude = list(config.exclude)
+        lang = self.lang
+        d = self.dialog = Gtk.Dialog(title=t(lang, 'settings'), transient_for=window.win, modal=True,
+                                     destroy_with_parent=True)
+        d.set_default_size(560, 520)
+        d.add_button(t(lang, 'defaults'), self.RESTORE)
+        d.add_button(t(lang, 'cancel'), Gtk.ResponseType.CANCEL)
+        self.anyway = d.add_button(t(lang, 'save_anyway'), self.ANYWAY)
+        d.add_button(t(lang, 'save'), Gtk.ResponseType.OK)
+        d.set_default_response(Gtk.ResponseType.OK)
+        d.connect('response', self.on_response)
+        area = d.get_content_area()
+        area.set_spacing(6)
+        for side in ('start', 'end', 'top', 'bottom'):
+            getattr(area, 'set_margin_' + side)(10)
+
+        area.pack_start(self.heading(t(lang, 'set_roots')), False, False, 0)
+        self.roots_box = self.list_box()
+        area.pack_start(self.scrolled(self.roots_box), True, True, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        b = Gtk.Button(label=t(lang, 'add_folder'))
+        b.connect('clicked', lambda *_: self.pick_into('roots'))
+        row.pack_start(b, False, False, 0)
+        area.pack_start(row, False, False, 0)
+
+        area.pack_start(self.heading(t(lang, 'set_exclude')), False, False, 0)
+        self.exclude_box = self.list_box()
+        area.pack_start(self.scrolled(self.exclude_box), True, True, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        b = Gtk.Button(label=t(lang, 'add_folder'))
+        b.connect('clicked', lambda *_: self.pick_into('exclude'))
+        row.pack_start(b, False, False, 0)
+        self.rule = Gtk.Entry()
+        self.rule.set_placeholder_text(t(lang, 'set_exclude_hint'))
+        self.rule.get_accessible().set_name(t(lang, 'set_exclude_hint'))
+        self.rule.connect('activate', lambda *_: self.add_rule())
+        row.pack_start(self.rule, True, True, 0)
+        b = Gtk.Button(label=t(lang, 'add'))
+        b.connect('clicked', lambda *_: self.add_rule())
+        row.pack_start(b, False, False, 0)
+        area.pack_start(row, False, False, 0)
+
+        self.hidden = Gtk.CheckButton(label=t(lang, 'set_hidden'))
+        self.hidden.set_active(config.hidden)
+        area.pack_start(self.hidden, False, False, 0)
+        self.problems = Gtk.Label(xalign=0)
+        self.problems.set_line_wrap(True)
+        self.problems.set_selectable(True)
+        area.pack_start(self.problems, False, False, 0)
+        self.refill()
+
+    @staticmethod
+    def heading(text):
+        lab = Gtk.Label(xalign=0)
+        lab.set_markup('<b>%s</b>' % GLib.markup_escape_text(text, -1))
+        return lab
+
+    @staticmethod
+    def list_box():
+        lb = Gtk.ListBox()
+        lb.set_selection_mode(Gtk.SelectionMode.NONE)
+        return lb
+
+    @staticmethod
+    def scrolled(child):
+        sw = Gtk.ScrolledWindow()
+        sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sw.set_min_content_height(90)
+        sw.set_shadow_type(Gtk.ShadowType.IN)
+        sw.add(child)
+        return sw
+
+    def refill(self):
+        for which, box in (('roots', self.roots_box), ('exclude', self.exclude_box)):
+            for child in box.get_children():
+                box.remove(child)
+            for i, item in enumerate(getattr(self, which)):
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+                row.set_margin_start(6)
+                row.set_margin_end(2)
+                lab = Gtk.Label(label=core.display(item), xalign=0)
+                lab.set_ellipsize(Pango.EllipsizeMode.MIDDLE)
+                lab.set_tooltip_text(core.display(item))
+                row.pack_start(lab, True, True, 0)
+                b = Gtk.Button(label=t(self.lang, 'remove'))
+                b.set_relief(Gtk.ReliefStyle.NONE)
+                b.get_accessible().set_name(t(self.lang, 'remove_item', item=core.display(item)))
+                b.connect('clicked', lambda _b, w=which, k=i: self.remove(w, k))
+                row.pack_end(b, False, False, 0)
+                box.add(row)
+            box.show_all()
+
+    # edits
+
+    def add(self, which, item):
+        roots, exclude = core.tidy_scope(self.roots + ([item] if which == 'roots' else []),
+                                         self.exclude + ([item] if which == 'exclude' else []))
+        self.roots, self.exclude = roots, exclude
+        self.refill()
+        self.update_problems([])
+
+    def remove(self, which, k):
+        items = getattr(self, which)
+        if 0 <= k < len(items):
+            del items[k]
+            self.refill()
+            self.update_problems([])
+
+    def add_rule(self):
+        text = self.rule.get_text().strip()
+        if text:
+            self.add('exclude', text)
+            self.rule.set_text('')
+
+    def pick_into(self, which):
+        path = self.choose_folder()
+        if path:
+            self.add(which, path)
+
+    def choose_folder(self):
+        """A folder from the system folder chooser, or None. Tests replace this."""
+        fc = Gtk.FileChooserDialog(title=t(self.lang, 'choose_folder'), transient_for=self.dialog,
+                                   action=Gtk.FileChooserAction.SELECT_FOLDER)
+        fc.add_button(t(self.lang, 'cancel'), Gtk.ResponseType.CANCEL)
+        fc.add_button(t(self.lang, 'add'), Gtk.ResponseType.OK)
+        fc.set_current_folder(core.HOME)
+        try:
+            return fc.get_filename() if fc.run() == Gtk.ResponseType.OK else None
+        finally:
+            fc.destroy()
+
+    def restore_defaults(self):
+        self.roots, self.exclude = list(core.DEFAULT_ROOTS), list(core.DEFAULT_EXCLUDE)
+        self.hidden.set_active(False)
+        self.refill()
+        self.update_problems([])
+
+    # saving
+
+    def update_problems(self, problems, blocked=False):
+        ctx = self.problems.get_style_context()
+        ctx.remove_class('error')
+        ctx.remove_class('warning')
+        self.anyway.set_visible(bool(problems) and not blocked)
+        if not problems:
+            self.problems.set_text('')
+            self.problems.set_visible(False)
+            return
+        if blocked:
+            text = t(self.lang, 'set_blocked', reason=core.scope_problem_text('', 'no_roots', self.lang))
+            ctx.add_class('error')
+        else:
+            text = '\n'.join([t(self.lang, 'set_warn')]
+                             + ['· ' + core.scope_problem_text(item, code, self.lang) for _, item, code in problems])
+            ctx.add_class('warning')
+        self.problems.set_text(text)
+        self.problems.set_visible(True)
+
+    def save(self, force=False):
+        """'saved', 'warn' (problems listed, not saved) or 'blocked' (nothing to index)."""
+        roots, exclude = core.tidy_scope(self.roots, self.exclude)
+        problems = core.check_scope(roots, exclude, self.mounts)
+        if any(code == 'no_roots' for _, _, code in problems):
+            self.update_problems(problems, blocked=True)
+            return 'blocked'
+        if problems and not force:
+            self.update_problems(problems)
+            return 'warn'
+        new = self.config.with_scope(roots, exclude, self.hidden.get_active())
+        if self.window.apply_scope(new):
+            self.dialog.destroy()
+        return 'saved'
+
+    def on_response(self, dialog, response):
+        if response == self.RESTORE:
+            self.restore_defaults()
+        elif response == Gtk.ResponseType.OK:
+            self.save()
+        elif response == self.ANYWAY:
+            self.save(force=True)
+        else:
+            dialog.destroy()
 
 
 def build_app(index, lang=None):

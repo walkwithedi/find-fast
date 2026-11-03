@@ -28,6 +28,8 @@ function startServer(tmp, lang) {
   fs.mkdirSync(bin);
   const log = path.join(tmp, 'opened.txt');
   fs.writeFileSync(path.join(bin, 'xdg-open'), '#!/bin/sh\necho "$1" >> "' + log + '"\n', {mode: 0o755});
+  // a stand-in folder chooser that always answers the pics folder
+  fs.writeFileSync(path.join(bin, 'zenity'), '#!/bin/sh\necho "' + path.join(root, 'pics') + '"\n', {mode: 0o755});
   const env = Object.assign({}, process.env, {LANG: lang, LC_ALL: '', LANGUAGE: '', PATH: bin + ':' + process.env.PATH});
   const proc = spawn('python3', [path.join(ROOT, 'find_fast.py'), '--web', '--no-browser',
     '--config', path.join(tmp, 'config.json'), '--cache', path.join(tmp, 'index.bin')], {env});
@@ -120,6 +122,65 @@ async function rowNames(page) {
     assert.strictEqual((await rowNames(page)).length, 200);
     await page.click('#more');
     await page.waitForFunction(() => document.querySelectorAll('#rows tr').length === 400);
+
+    // right-click a row: exclude its folder after confirming
+    await page.fill('#q', 'report-2019');
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
+    await page.click('#rows tr', {button: 'right'});
+    assert.ok(await page.isVisible('#ctx'));
+    assert.strictEqual(await page.textContent('#mExclude'), '排除所在文件夹');
+    assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'mOpen');
+    let asked = '';
+    page.once('dialog', d => { asked = d.message(); d.accept(); });
+    await page.click('#mExclude');
+    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('status').textContent));
+    assert.ok(asked.includes(path.join(srv.root, 'docs', 'old')), asked);
+    assert.ok(await page.isHidden('#ctx'));
+    await page.fill('#q', 'report-2019');
+    await page.waitForFunction(() => /^0 个结果/.test(document.getElementById('status').textContent));
+    // a folder row offers "exclude this folder"; Escape closes the menu
+    await page.fill('#q', 'pics');
+    await page.waitForFunction(() => document.querySelector('#rows td.name') && /pics/.test(document.querySelector('#rows td.name').textContent));
+    await page.click('#rows tr', {button: 'right'});
+    assert.strictEqual(await page.textContent('#mExclude'), '排除此文件夹');
+    await page.keyboard.press('Escape');
+    assert.ok(await page.isHidden('#ctx'));
+
+    // settings: pick a folder, add a name rule, save
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setRoots li').length === 1);
+    assert.strictEqual(await page.textContent('#setRoots li span'), srv.root);
+    await page.click('#addExcludeFolder');
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#setExclude li span'), x => x.textContent).some(t => /pics$/.test(t)));
+    await page.fill('#ruleIn', '*.docx');
+    await page.press('#ruleIn', 'Enter');
+    assert.ok((await page.$$eval('#setExclude li span', xs => xs.map(x => x.textContent))).includes('*.docx'));
+    // a path that does not exist is listed first; Save anyway is offered
+    await page.fill('#ruleIn', path.join(srv.root, 'no-such-folder'));
+    await page.click('#addRule');
+    await page.click('#setSave');
+    await page.waitForFunction(() => document.getElementById('setMsg').className === 'warn');
+    assert.ok(await page.isVisible('#setAnyway'));
+    assert.match(await page.textContent('#setMsg'), /no-such-folder/);
+    await page.setViewportSize({width: 360, height: 700});
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 360), 'horizontal scroll with settings open');
+    await page.setViewportSize({width: 1100, height: 800});
+    await page.click('#setAnyway');
+    await page.waitForFunction(() => !document.getElementById('settings').open);
+    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('status').textContent));
+    await page.fill('#q', 'report');
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
+    assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf']);
+    const saved = JSON.parse(fs.readFileSync(path.join(path.dirname(srv.root), 'config.json'), 'utf8'));
+    assert.ok(saved.exclude.includes('*.docx') && saved.exclude.includes(path.join(srv.root, 'pics')));
+    // empty folder list cannot be saved
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open);
+    await page.click('#setRoots li button');
+    await page.click('#setSave');
+    await page.waitForFunction(() => document.getElementById('setMsg').className === 'bad');
+    assert.ok(await page.isHidden('#setAnyway'));
+    await page.click('#setCancel');
 
     // narrow screen: no horizontal page scroll; dark mode colours
     await page.setViewportSize({width: 360, height: 700});

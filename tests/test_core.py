@@ -307,6 +307,119 @@ class OverlayTest(TempTree):
         self.assertEqual(self.names(idx.search('x.png')), ['x.png'])
 
 
+class SettingsTest(TempTree):
+    def scope(self, roots=None, exclude=None, hidden=False):
+        return self.config.with_scope([self.root] if roots is None else roots,
+                                      core.DEFAULT_EXCLUDE if exclude is None else exclude, hidden)
+
+    def all_paths(self, idx):
+        return sorted(self.rel(idx.search('', 'path', desc=False)))
+
+    def fresh(self, config):
+        idx = core.Index(config, os.path.join(self.tmp, 'fresh.bin'), mounts={})
+        idx.refresh()
+        return idx
+
+    def test_tidy_merges_duplicates_and_uses_tilde(self):
+        home = core.HOME
+        elsewhere = os.path.join(self.tmp, 'a')
+        roots, exclude = core.tidy_scope(
+            [home, '~', home + '/x/', ' ', elsewhere, os.path.join(elsewhere, '..', 'a')],
+            ['node_modules', ' node_modules ', '~/x/y', home + '/x/y', '*.tmp', ''])
+        self.assertEqual(roots, ['~', '~/x', elsewhere])
+        self.assertEqual(exclude, ['node_modules', '~/x/y', '*.tmp'])
+        # a sibling whose name starts like the home folder is not under it
+        fake_home = os.path.join(self.tmp, 'h')
+        self.assertEqual(core.to_tilde(fake_home + '2', home=fake_home), fake_home + '2')
+        self.assertEqual(core.to_tilde(fake_home + '/d', home=fake_home), '~/d')
+
+    def test_check_scope(self):
+        docs = os.path.join(self.root, 'docs')
+        self.assertEqual(core.check_scope([], []), [('roots', '', 'no_roots')])
+        missing = os.path.join(self.tmp, 'gone')
+        got = core.check_scope([self.root, docs, missing],
+                               ['node_modules', os.path.join(self.tmp, 'elsewhere'), os.path.join(docs, 'old'), '/'],
+                               mounts={})
+        self.assertIn(('roots', docs, 'nested'), got)
+        self.assertIn(('roots', missing, 'missing'), got)
+        self.assertIn(('exclude', os.path.join(self.tmp, 'elsewhere'), 'missing'), got)
+        self.assertIn(('exclude', '/', 'outside'), got)
+        self.assertNotIn(('exclude', os.path.join(docs, 'old'), 'outside'), got)
+        self.assertFalse(any(item == 'node_modules' for _, item, _ in got))
+        net = core.check_scope([docs], [], mounts={self.root: 'nfs4'})
+        self.assertEqual(net, [('roots', docs, 'network')])
+        self.assertEqual(core.check_scope([docs], [], mounts={self.root: 'ext4'}), [])
+        for code in ('no_roots', 'missing', 'network', 'nested', 'outside'):
+            for lang in ('zh', 'en'):
+                self.assertTrue(core.scope_problem_text('x', code, lang))
+
+    def test_config_keeps_other_keys(self):
+        path = os.path.join(self.tmp, 'c.json')
+        c = core.Config(path, {'roots': ['~'], 'keys': {'locate': '<Primary>Return'}})
+        c2 = c.with_scope([self.root], [], True)
+        c2.save()
+        c3 = core.Config(path)
+        self.assertEqual(c3.roots, [self.root])
+        self.assertTrue(c3.hidden)
+        self.assertEqual(c3.other, {'keys': {'locate': '<Primary>Return'}})
+
+    def test_added_exclusions_pruned_like_a_fresh_scan(self):
+        idx = self.index()
+        touch(os.path.join(self.root, 'docs', 'new.tmp'), b'', 1700000900)
+        idx.apply_changes([os.path.join(self.root, 'docs')])
+        new = self.scope(exclude=core.DEFAULT_EXCLUDE + [os.path.join(self.root, 'docs', 'old'), 'IMG_*'])
+        self.assertEqual(idx.reconfigure(new), 'pruned')
+        got = self.all_paths(idx)
+        self.assertEqual(got, self.all_paths(self.fresh(new)))
+        self.assertNotIn('docs/old', got)
+        self.assertNotIn('docs/old/report-2019.pdf', got)
+        self.assertNotIn('pics/IMG_0001.jpg', got)
+        self.assertIn('docs/new.tmp', got)
+        # the cache now belongs to the new settings
+        again = core.Index(new, self.cache, mounts={})
+        self.assertTrue(again.load())
+        self.assertEqual(self.all_paths(again), got)
+
+    def test_folder_name_exclusion_pruned(self):
+        idx = self.index()
+        new = self.scope(exclude=core.DEFAULT_EXCLUDE + ['docs'])
+        self.assertEqual(idx.reconfigure(new), 'pruned')
+        self.assertEqual(self.all_paths(idx), self.all_paths(self.fresh(new)))
+        self.assertFalse(any(p.startswith('docs') for p in self.all_paths(idx)))
+
+    def test_other_changes_rescan(self):
+        idx = self.index()
+        self.assertEqual(idx.reconfigure(self.scope()), 'same')
+        new = self.scope(hidden=True)
+        self.assertEqual(idx.reconfigure(new), 'rescanned')
+        self.assertIn('.hidden/secret-report.txt', self.all_paths(idx))
+        new = self.scope(exclude=[], hidden=True)
+        self.assertEqual(idx.reconfigure(new), 'rescanned')
+        self.assertIn('node_modules/pkg/report.js', self.all_paths(idx))
+        other = os.path.join(self.tmp, 'other')
+        touch(os.path.join(other, 'extra-file.txt'))
+        new = self.scope(roots=[self.root, other], exclude=[], hidden=True)
+        self.assertEqual(idx.reconfigure(new), 'rescanned')
+        found = [p for p in self.rel(idx.search('extra-file'))]
+        self.assertEqual(found, [os.path.join('..', 'other', 'extra-file.txt')])
+        self.assertEqual(self.all_paths(idx), self.all_paths(self.fresh(new)))
+
+    def test_reused_folders_follow_new_exclusions(self):
+        idx = self.index()
+        new = self.scope(roots=[self.root, os.path.join(self.tmp, 'nothing-here')],
+                         exclude=core.DEFAULT_EXCLUDE + ['pics'])
+        idx.config = new
+        idx.refresh()
+        self.assertFalse(any(p.startswith('pics') for p in self.all_paths(idx)))
+
+    def test_stopped_rescan(self):
+        idx = self.index()
+        stop = threading.Event()
+        stop.set()
+        self.assertEqual(idx.reconfigure(self.scope(hidden=True), stop=stop), 'stopped')
+        self.assertEqual(idx.state, 'ready')
+
+
 class WatcherTest(TempTree):
     def test_inotify_updates_index(self):
         idx = self.index()

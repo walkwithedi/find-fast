@@ -168,6 +168,109 @@ class GtkTest(unittest.TestCase):
             pump(0.05)
             self.assertEqual(ui.Pango.parse_markup(w.store[0][ui.COL_TIP], -1, '\0')[2], w.result.path(1))
 
+    def wait_ready(self):
+        self.assertTrue(pump(until=lambda: self.index.state == 'ready' and not self.w.worker.is_alive()
+                             and getattr(self.w, 'pending_scope', None) is None))
+        pump(0.1)
+
+    def test_settings_dialog_edits_and_saves(self):
+        w = self.window()
+        Gdk = ui.Gdk
+        # Ctrl+, and the gear button both open the same dialog
+        self.assertTrue(self.accel(Gdk.KEY_comma, Gdk.ModifierType.CONTROL_MASK))
+        s = w.settings
+        self.assertIsNotNone(s)
+        w.gear.clicked()
+        self.assertIs(w.settings, s)
+        other = os.path.join(self.tmp, 'other')
+        touch(os.path.join(other, 'from-other-root.txt'))
+        s.choose_folder = lambda: other
+        s.pick_into('roots')
+        s.choose_folder = lambda: os.path.join(self.root, 'docs')
+        s.pick_into('exclude')
+        s.rule.set_text('*.jpg')
+        s.add_rule()
+        s.rule.set_text('*.jpg')
+        s.add_rule()
+        self.assertEqual(s.roots, [self.root, other])
+        self.assertEqual(s.exclude.count('*.jpg'), 1)
+        self.assertIn(os.path.join(self.root, 'docs'), s.exclude)
+        self.assertEqual(len(s.roots_box.get_children()), 2)
+        self.assertEqual(s.save(), 'saved')
+        self.wait_ready()
+        saved = core.Config(os.path.join(self.tmp, 'config.json'))
+        self.assertEqual(saved.roots, [self.root, other])
+        self.assertIn('*.jpg', saved.exclude)
+        self.type('from-other-root')
+        self.assertEqual(self.names(), ['from-other-root.txt'])
+        self.type('report')
+        self.assertEqual(self.names(), [])
+        self.type('jpg')
+        self.assertEqual(self.names(), [])
+        self.assertIsNone(w.settings)
+
+    def test_settings_problems_and_save_anyway(self):
+        w = self.window()
+        s = w.open_settings()
+        while s.roots:
+            s.remove('roots', 0)
+        self.assertEqual(s.save(), 'blocked')
+        self.assertTrue(s.problems.get_visible())
+        self.assertFalse(s.anyway.get_visible())
+        self.assertTrue(s.problems.get_text().startswith('Save failed'))
+        missing = os.path.join(self.tmp, 'not-there')
+        s.add('roots', self.root)
+        s.add('roots', missing)
+        s.add('exclude', '/opt-not-under-root')
+        self.assertEqual(s.save(), 'warn')
+        self.assertTrue(s.anyway.get_visible())
+        text = s.problems.get_text()
+        self.assertIn(missing, text)
+        self.assertIn('/opt-not-under-root', text)
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, 'config.json')))
+        self.assertEqual(s.save(force=True), 'saved')
+        self.wait_ready()
+        self.assertIn(missing, core.Config(os.path.join(self.tmp, 'config.json')).roots)
+        s = w.open_settings()
+        s.restore_defaults()
+        self.assertEqual(s.roots, core.DEFAULT_ROOTS)
+        self.assertFalse(s.hidden.get_active())
+        s.dialog.response(ui.Gtk.ResponseType.CANCEL)
+        pump(0.05)
+        self.assertIsNone(w.settings)
+
+    def test_context_menu_exclude(self):
+        w = self.window()
+        asked = []
+        w.confirm = lambda text, detail, ok, cb: (asked.append(text), cb(True))
+        self.type('report-2019')
+        w.cur = 0
+        w.popup_menu(None)
+        self.assertTrue(w.exclude_item.get_visible())
+        self.assertEqual(w.exclude_item.get_label(), 'Exclude the containing folder')
+        w.menu.popdown()
+        w.exclude_current()
+        self.assertEqual(asked, ['Exclude %s?' % os.path.join(self.root, 'docs', 'old')])
+        self.wait_ready()
+        self.assertIn(os.path.join(self.root, 'docs', 'old'),
+                      [os.path.expanduser(e) for e in core.Config(os.path.join(self.tmp, 'config.json')).exclude])
+        self.type('report-2019')
+        self.assertEqual(self.names(), [])
+        self.type('pics')
+        w.cur = 0
+        w.popup_menu(None)
+        self.assertEqual(w.exclude_item.get_label(), 'Exclude this folder')
+        w.menu.popdown()
+        self.type('b.txt')
+        w.cur = 0
+        w.popup_menu(None)
+        self.assertFalse(w.exclude_item.get_visible())     # its folder is the indexed folder itself
+        w.menu.popdown()
+
+    def accel(self, keyval, mods=0):
+        """Press a window accelerator."""
+        return ui.Gtk.accel_groups_activate(self.w.win, keyval, ui.Gdk.ModifierType(mods))
+
     def test_open_missing_file(self):
         w = self.window()
         self.type('notes')

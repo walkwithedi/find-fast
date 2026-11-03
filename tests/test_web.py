@@ -137,6 +137,56 @@ class WebTest(unittest.TestCase):
         code, _ = self.req('POST', '/api/ping', headers={'Content-Length': '9999999'}, body=None)
         self.assertIn(code, (200, 400))
 
+    def wait_ready(self):
+        deadline = time.time() + 10
+        while (self.index.state != 'ready' or self.st.worker.is_alive()) and time.time() < deadline:
+            time.sleep(0.02)
+
+    def test_settings_read_check_and_save(self):
+        code, j = self.req('GET', '/api/settings')
+        self.assertEqual(code, 200)
+        self.assertEqual(j['roots'], [self.root])
+        self.assertEqual(j['defaults']['roots'], core.DEFAULT_ROOTS)
+        self.assertIn('can_pick', j)
+        self.assertEqual(self.req('GET', '/api/settings', token=False)[0], 403)
+        code, j = self.req('POST', '/api/settings', {'roots': [], 'exclude': [], 'hidden': False})
+        self.assertEqual((code, j['saved'], j['blocked']), (200, False, True))
+        missing = os.path.join(self.tmp, 'missing')
+        body = {'roots': [self.root, missing], 'exclude': ['node_modules', os.path.join(self.root, 'pics')],
+                'hidden': False}
+        code, j = self.req('POST', '/api/settings', body)
+        self.assertEqual((j['saved'], j['blocked']), (False, False))
+        self.assertEqual(len(j['problems']), 1)
+        self.assertIn(missing, j['problems'][0])
+        self.assertFalse(os.path.exists(os.path.join(self.tmp, 'config.json')))
+        body['force'] = True
+        code, j = self.req('POST', '/api/settings', body)
+        self.assertEqual((code, j), (200, {'saved': True}))
+        self.wait_ready()
+        self.assertEqual(core.Config(os.path.join(self.tmp, 'config.json')).roots, [self.root, missing])
+        code, j = self.search('IMG')
+        self.assertEqual(j['count'], 0)
+        self.assertEqual(self.req('POST', '/api/settings', {'roots': 'x'})[0], 400)
+
+    def test_exclude_row(self):
+        code, j = self.search('report-2019')
+        code, out = self.req('POST', '/api/exclude', {'page': 'p1', 'sid': j['sid'], 'k': 0})
+        self.assertEqual((code, out['excluded']), (200, os.path.join(self.root, 'docs', 'old')))
+        self.wait_ready()
+        self.assertEqual(self.search('report-2019')[1]['count'], 0)
+        code, j = self.search('b.txt')
+        self.assertEqual(self.req('POST', '/api/exclude', {'page': 'p1', 'sid': j['sid'], 'k': 0})[0], 400)
+        self.assertEqual(self.req('POST', '/api/exclude', {'page': 'p1', 'sid': 'stale', 'k': 0})[0], 409)
+
+    def test_pick_folder_without_zenity(self):
+        old = web.shutil.which
+        web.shutil.which = lambda name: None
+        try:
+            code, j = self.req('POST', '/api/pick_folder', {})
+        finally:
+            web.shutil.which = old
+        self.assertEqual((code, j), (200, {'path': None, 'available': False}))
+
     def test_messages_have_same_keys(self):
         self.assertEqual(set(web.MESSAGES['zh']), set(web.MESSAGES['en']))
 
