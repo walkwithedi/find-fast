@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.5.1
+
+- The upgrade module copy is version 1.1: files unpacked or copied by an upgrade get 755 or 644 by whether the owner may run them, less the bits the process umask clears (as unzip and cp do), instead of those modes unchanged; with the usual umask 022 nothing differs. TOOL_UPGRADE_VERSION names 1.1 and the new SHA-256.
+
 ## 0.5.0
 
 - Upgrade in place: Settings in the window has an Upgrade section (Upgrade from a zip…, Upgrade from an unpacked folder…, Roll back to previous version), and the browser page has Upgrade beside Quit. The check shows current version → new version, the CHANGELOG entries between the two, the files kept and any extra files, and calls out a downgrade or reinstall; the confirm button reads Upgrade to vX.Y.Z. While it runs the status bar (or the page) shows the stage and the search box stays usable; afterwards the window opens again on the new version, and the page reconnects to the service restarted on the same port and token. The old folder is kept as the hidden `.find-fast.上一版` next to it; Roll back swaps the two. The path does not change, so desktop links, the menu entry written by `install.sh` and the show-or-hide shortcut keep working without reinstalling.
