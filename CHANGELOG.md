@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.3.1
+
+- The READMEs end with a Feedback section giving the maintainer's feedback address. The sensitive-data scanner allows that one full address (PUBLIC_ADDRESSES) and still reports every other e-mail address. walkwithedi/edi-lab#206.
+
 ## 0.3.0
 
 - Plain search words match the whole path: each word may be in the name or in the name of any folder above it, so `atlas 28` finds `~/Documents/Atlas/report 28.pdf`. `!word` leaves out entries with the word anywhere in their path; in `a|b` each alternative follows its own kind. Wildcards, `ext:`, `regex:` and the regular-expression mode still look at names only; `path:` and words with `/` are unchanged. Words found in no folder path keep the name-only search, and the folder matches of recent words are kept while typing.
