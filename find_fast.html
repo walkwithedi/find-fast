@@ -39,14 +39,46 @@
   td.dir { color:var(--muted); word-break:break-all; font-size:13.5px; }
   td.size, td.time { white-space:nowrap; font-variant-numeric:tabular-nums; }
   td.size { text-align:right; }
+  td.loc { width:1%; padding:2px 6px; }
+  td.loc button { padding:2px 7px; font-size:13px; line-height:1.2; }
+  th.loc { width:1%; padding:6px 10px; }
   tr[aria-selected="true"] td { background:var(--sel); }
   tbody tr { cursor:default; }
   .kind { display:inline-block; width:1.4em; color:var(--muted); }
+  .tag { display:inline-block; font-size:12px; line-height:1.3; padding:0 5px; margin-right:6px; border-radius:4px;
+         border:1px solid var(--line); color:var(--muted); white-space:nowrap; }
+  .tag.newest { border-color:var(--ok); color:var(--ok); }
   #more { display:none; margin:8px auto; }
   footer { color:var(--muted); font-size:13px; margin-top:20px; border-top:1px solid var(--line); padding-top:10px;
            display:flex; flex-wrap:wrap; gap:8px 16px; justify-content:space-between; }
   #closed { display:none; background:var(--card); border:1px solid var(--bad); color:var(--bad); border-radius:8px; padding:12px; margin-top:12px; }
   .help { color:var(--muted); font-size:13px; margin:0 0 8px; }
+  #gear { padding:7px 10px; }
+  dialog { background:var(--card); color:var(--text); border:1px solid var(--line); border-radius:10px;
+           width:min(560px, calc(100vw - 24px)); max-height:calc(100vh - 24px); padding:16px; }
+  dialog::backdrop { background:rgba(0,0,0,.35); }
+  dialog h2 { font-size:18px; margin:0 0 8px; }
+  dialog h3 { font-size:15px; margin:12px 0 4px; }
+  .items { list-style:none; margin:0; padding:0; border:1px solid var(--line); border-radius:6px; max-height:160px; overflow:auto; }
+  .items li { display:flex; gap:8px; align-items:center; justify-content:space-between; padding:3px 4px 3px 8px;
+              border-bottom:1px solid var(--line); }
+  .items li:last-child { border-bottom:0; }
+  .items li span { min-width:0; overflow-wrap:anywhere; }
+  .items li button { padding:2px 8px; flex:none; }
+  .row { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:6px 0 0; }
+  .row input[type=text] { flex:1 1 160px; min-width:0; padding:6px 8px; font-size:14px; border:1px solid var(--line);
+                          border-radius:6px; background:var(--bg); color:var(--text); }
+  .row .grow { flex:1 1 auto; }
+  .check { display:block; margin:12px 0 0; }
+  #setMsg { margin:8px 0 0; white-space:pre-line; }
+  #setMsg.ok { color:var(--ok); } #setMsg.warn { color:var(--warn); } #setMsg.bad { color:var(--bad); } #setMsg.info { color:var(--info); }
+  #ctx { position:fixed; z-index:10; min-width:200px; max-width:calc(100vw - 16px); background:var(--card);
+         border:1px solid var(--line); border-radius:8px; box-shadow:0 6px 18px rgba(0,0,0,.2); padding:4px 0; }
+  #ctx[hidden] { display:none; }
+  #ctx button { display:block; width:100%; text-align:left; border:0; border-radius:0; background:transparent; padding:6px 14px; }
+  #ctx button[hidden] { display:none; }
+  #ctx button:hover, #ctx button:focus-visible { background:var(--sel); }
+  #ctx hr { border:0; border-top:1px solid var(--line); margin:4px 0; }
   code { font-family:"Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; font-size:13px; }
 </style>
 </head>
@@ -58,6 +90,7 @@
   </header>
   <div class="bar">
     <input id="q" type="search" autocomplete="off" spellcheck="false" autofocus aria-label="搜索">
+    <button id="gear" type="button" aria-label="设置" title="设置">⚙</button>
     <label for="sort" id="sortLabel">排序</label>
     <select id="sort">
       <option value="mtime:1">最新在前</option>
@@ -72,7 +105,7 @@
   <p class="help" id="help"></p>
   <div class="actions">
     <button id="open" type="button" disabled>打开</button>
-    <button id="folder" type="button" disabled>打开所在文件夹</button>
+    <button id="folder" type="button" disabled>定位</button>
     <button id="copy" type="button" disabled>复制路径</button>
     <button id="rescan" type="button">重新扫描</button>
   </div>
@@ -84,12 +117,48 @@
         <th data-sort="path"><button type="button" id="hPath">路径</button></th>
         <th data-sort="size"><button type="button" id="hSize">大小</button></th>
         <th data-sort="mtime"><button type="button" id="hTime">修改时间</button></th>
+        <th class="loc" id="hLoc">定位</th>
       </tr></thead>
       <tbody id="rows" role="listbox" tabindex="-1"></tbody>
     </table>
   </div>
   <button id="more" type="button">显示更多</button>
   <div id="closed">服务已退出，可关闭本页。</div>
+  <div id="ctx" role="menu" hidden>
+    <button type="button" role="menuitem" id="mFolder">定位</button>
+    <button type="button" role="menuitem" id="mOpen">打开</button>
+    <button type="button" role="menuitem" id="mCopy">复制路径</button>
+    <hr>
+    <button type="button" role="menuitem" id="mJump">跳到最新版</button>
+    <button type="button" role="menuitem" id="mExclude">排除所在文件夹</button>
+    <button type="button" role="menuitem" id="mRescan">重新扫描</button>
+  </div>
+  <dialog id="settings" aria-labelledby="setTitle">
+    <h2 id="setTitle">设置</h2>
+    <h3 id="setRootsH">索引的文件夹</h3>
+    <ul id="setRoots" class="items" aria-labelledby="setRootsH"></ul>
+    <div class="row">
+      <button type="button" id="addRoot">添加文件夹……</button>
+      <input type="text" id="rootPath" hidden>
+      <button type="button" id="addRootPath" hidden>添加</button>
+    </div>
+    <h3 id="setExcludeH">排除</h3>
+    <ul id="setExclude" class="items" aria-labelledby="setExcludeH"></ul>
+    <div class="row">
+      <button type="button" id="addExcludeFolder">添加文件夹……</button>
+      <input type="text" id="ruleIn">
+      <button type="button" id="addRule">添加</button>
+    </div>
+    <label class="check"><input type="checkbox" id="setHidden"> <span id="setHiddenL">索引隐藏文件和文件夹</span></label>
+    <div id="setMsg" role="status" aria-live="polite"></div>
+    <div class="row">
+      <button type="button" id="setDefaults">恢复默认</button>
+      <span class="grow"></span>
+      <button type="button" id="setCancel">取消</button>
+      <button type="button" id="setAnyway" hidden>仍然保存</button>
+      <button type="button" id="setSave">保存</button>
+    </div>
+  </dialog>
   <footer><span id="rule">关闭本页后服务数秒内自动退出；点「退出」立即结束。</span><span id="version"></span><span id="index"></span></footer>
 </main>
 <script>
@@ -103,7 +172,9 @@ const T = {
     title: '秒搜文件', quit: '退出', search: '搜索', placeholder: '搜索文件名……', sort: '排序',
     sorts: ['最新在前', '最旧在前', '名称 A→Z', '名称 Z→A', '路径 A→Z', '最大在前', '最小在前'],
     help: '多个词同时匹配；a|b 任一；!a 排除；* ? 通配整个文件名；ext:pdf;docx；path: 或带 / 的词匹配完整路径；regex: 正则。',
-    open: '打开', folder: '打开所在文件夹', copy: '复制路径', rescan: '重新扫描', more: '显示更多',
+    open: '打开', folder: '定位', copy: '复制路径', colLocate: '定位',
+    locateTip: '在文件管理器中打开所在文件夹并选中', locateItem: n => '定位 ' + n,
+    locatedFolder: '已打开所在文件夹，文件管理器不支持自动选中', rescan: '重新扫描', more: '显示更多',
     cols: ['名称', '路径', '大小', '修改时间'],
     results: n => n + ' 个结果', results_ms: (n, ms) => n + ' 个结果（' + ms + ' 毫秒）',
     entries: n => '共 ' + n + ' 个条目', scanning: (d, f) => '正在更新索引：' + d + ' 个文件夹，' + f + ' 个条目……',
@@ -115,12 +186,27 @@ const T = {
     rescan_started: '已开始重新扫描', rescan_busy: '正在扫描，稍后再试',
     closed: '服务已退出，可关闭本页。需要再用时重新双击「双击运行」。',
     rule: '关闭本页后服务数秒内自动退出；点「退出」立即结束。', folderKind: '文件夹',
+    settings: '设置', setRoots: '索引的文件夹', setExclude: '排除', setHidden: '索引隐藏文件和文件夹',
+    addFolder: '添加文件夹……', add: '添加', remove: '删除', removeItem: x => '删除 ' + x,
+    rulePh: '名称规则，如 node_modules、*.tmp', rootPh: '输入文件夹的完整路径',
+    defaults: '恢复默认', cancel: '取消', save: '保存', saveAnyway: '仍然保存',
+    picking: '请在弹出的窗口中选择文件夹……', noPicker: '没有找到文件夹选择窗口（zenity），请直接输入路径。',
+    setBlocked: r => '保存失败：' + r + '。请先添加一个文件夹。',
+    setWarn: '保存前请确认以下几项，确认无误后点「仍然保存」：',
+    saveFailed: e => '保存失败：' + e + '。请检查后再试。',
+    applying: '正在按新设置更新索引……', applied: '已按新设置更新索引',
+    excludeThis: '排除此文件夹', excludeParent: '排除所在文件夹',
+    verNewest: '最新', verOlder: '有更新版', jump: '跳到最新版', verSkipped: '结果过多，未标出类似版本',
+    verTip: (n, p) => '同组共 ' + n + ' 个类似版本，最新：' + p,
+    excludeQ: p => '排除 ' + p + '？\n\n这个文件夹及其中的全部条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
   },
   en: {
     title: 'find-fast', quit: 'Quit', search: 'Search', placeholder: 'Search file names...', sort: 'Sort',
     sorts: ['Newest first', 'Oldest first', 'Name A→Z', 'Name Z→A', 'Path A→Z', 'Largest first', 'Smallest first'],
     help: 'Words must all match; a|b either; !a not; * ? match a whole name; ext:pdf;docx; path: or a word with / matches the whole path; regex: a regular expression.',
-    open: 'Open', folder: 'Open containing folder', copy: 'Copy path', rescan: 'Rescan', more: 'Show more',
+    open: 'Open', folder: 'Locate', copy: 'Copy path', colLocate: 'Locate',
+    locateTip: 'Open the containing folder in the file manager and select the item', locateItem: n => 'Locate ' + n,
+    locatedFolder: 'Opened the containing folder; the file manager cannot select the item', rescan: 'Rescan', more: 'Show more',
     cols: ['Name', 'Path', 'Size', 'Modified'],
     results: n => n + ' results', results_ms: (n, ms) => n + ' results (' + ms + ' ms)',
     entries: n => n + ' entries', scanning: (d, f) => 'Updating the index: ' + d + ' folders, ' + f + ' entries...',
@@ -132,6 +218,19 @@ const T = {
     rescan_started: 'Rescan started', rescan_busy: 'A scan is running; try again later',
     closed: 'The service has stopped; you can close this page. Double-click the launcher to start it again.',
     rule: 'Closing this page stops the service within seconds; Quit stops it at once.', folderKind: 'Folder',
+    settings: 'Settings', setRoots: 'Indexed folders', setExclude: 'Excluded', setHidden: 'Index hidden files and folders',
+    addFolder: 'Add folder...', add: 'Add', remove: 'Remove', removeItem: x => 'Remove ' + x,
+    rulePh: 'Name rule, such as node_modules or *.tmp', rootPh: 'Full path of a folder',
+    defaults: 'Restore defaults', cancel: 'Cancel', save: 'Save', saveAnyway: 'Save anyway',
+    picking: 'Choose the folder in the window that opened...', noPicker: 'No folder chooser (zenity) was found; type the path instead.',
+    setBlocked: r => 'Save failed: ' + r + '. Add a folder first.',
+    setWarn: 'Check these before saving; if they are as intended, choose Save anyway:',
+    saveFailed: e => 'Save failed: ' + e + '. Check and try again.',
+    applying: 'Updating the index for the new settings...', applied: 'Index updated for the new settings',
+    excludeThis: 'Exclude this folder', excludeParent: 'Exclude the containing folder',
+    verNewest: 'Newest', verOlder: 'Newer exists', jump: 'Go to the newest version', verSkipped: 'Too many results to mark similar versions',
+    verTip: (n, p) => n + ' similar versions; newest: ' + p,
+    excludeQ: p => 'Exclude ' + p + '?\n\nThe folder and everything in it are removed from the index and no longer indexed. Remove the rule under Excluded in Settings to undo this.',
   },
 };
 let L = T.zh;
@@ -157,7 +256,9 @@ function serviceGone() {
   alive = false;
   $('closed').textContent = L.closed;
   $('closed').style.display = 'block';
-  ['q', 'sort', 'open', 'folder', 'copy', 'rescan', 'quit', 'more'].forEach(id => { $(id).disabled = true; });
+  ['q', 'sort', 'open', 'folder', 'copy', 'rescan', 'quit', 'more', 'gear'].forEach(id => { $(id).disabled = true; });
+  closeMenu();
+  if ($('settings').open) $('settings').close();
 }
 function ping() {
   post('/api/ping', {page: PAGE}).then(() => { failures = 0; }).catch(() => { if (++failures >= 3) serviceGone(); });
@@ -177,8 +278,11 @@ function setStatus(text, kind) {
   s.className = kind || '';
   s.textContent = text;
 }
+let versions = 'ready';
 function showCount(ms) {
-  setStatus(ms === undefined ? L.results(count.toLocaleString()) : L.results_ms(count.toLocaleString(), ms), '');
+  let text = ms === undefined ? L.results(count.toLocaleString()) : L.results_ms(count.toLocaleString(), ms);
+  if (versions === 'too_many') text += ' · ' + L.verSkipped;
+  setStatus(text, '');
 }
 
 function applyLanguage(lang) {
@@ -193,9 +297,21 @@ function applyLanguage(lang) {
   Array.from($('sort').options).forEach((o, i) => { o.textContent = L.sorts[i]; });
   $('help').textContent = L.help;
   $('open').textContent = L.open; $('folder').textContent = L.folder; $('copy').textContent = L.copy;
+  $('folder').title = L.locateTip; $('mFolder').title = L.locateTip; $('hLoc').textContent = L.colLocate;
   $('rescan').textContent = L.rescan; $('more').textContent = L.more;
   ['hName', 'hPath', 'hSize', 'hTime'].forEach((id, i) => { $(id).textContent = L.cols[i]; });
   $('rule').textContent = L.rule;
+  $('gear').setAttribute('aria-label', L.settings); $('gear').title = L.settings;
+  $('setTitle').textContent = L.settings; $('setRootsH').textContent = L.setRoots; $('setExcludeH').textContent = L.setExclude;
+  $('setHiddenL').textContent = L.setHidden;
+  ['addRoot', 'addExcludeFolder'].forEach(id => { $(id).textContent = L.addFolder; });
+  ['addRootPath', 'addRule'].forEach(id => { $(id).textContent = L.add; });
+  $('ruleIn').placeholder = L.rulePh; $('ruleIn').setAttribute('aria-label', L.rulePh);
+  $('rootPath').placeholder = L.rootPh; $('rootPath').setAttribute('aria-label', L.rootPh);
+  $('setDefaults').textContent = L.defaults; $('setCancel').textContent = L.cancel;
+  $('setAnyway').textContent = L.saveAnyway; $('setSave').textContent = L.save;
+  $('mOpen').textContent = L.open; $('mFolder').textContent = L.folder; $('mCopy').textContent = L.copy;
+  $('mRescan').textContent = L.rescan; $('mJump').textContent = L.jump;
 }
 
 function showIndex(st) {
@@ -210,14 +326,16 @@ function showIndex(st) {
   $('index').textContent = parts.join(' · ');
   if (alive) $('rescan').disabled = st.state !== 'ready';
 }
-let statusTimer = null;
+let statusTimer = null, waitApply = false;
 function pollStatus() {
   if (!alive) return;
   api('/api/status').then(st => {
     const was = lastStatus && lastStatus.state;
     showIndex(st);
-    if (was && was !== 'ready' && st.state === 'ready') search(true);
-    const next = st.state === 'ready' ? 10000 : 1000;
+    if (waitApply && !st.applying && st.state === 'ready') {
+      waitApply = false; search(true); setStatus(L.applied, 'ok');
+    } else if (was && was !== 'ready' && st.state === 'ready') search(true);
+    const next = st.state === 'ready' && !waitApply ? 10000 : (waitApply ? 300 : 1000);
     clearTimeout(statusTimer);
     statusTimer = setTimeout(pollStatus, next);
   }).catch(() => { clearTimeout(statusTimer); statusTimer = setTimeout(pollStatus, 3000); });
@@ -237,17 +355,30 @@ function renderRow(r) {
   tr.setAttribute('role', 'option');
   tr.setAttribute('aria-selected', 'false');
   tr.dataset.k = r.k;
+  tr.title = r.ver ? r.path + '\n' + L.verTip(r.ver_count, r.ver_newest_path) : r.path;
   const name = document.createElement('td');
   name.className = 'name';
   const kind = document.createElement('span');
   kind.className = 'kind';
   kind.textContent = r.folder ? '📁' : '';
   if (r.folder) kind.setAttribute('aria-label', L.folderKind);
-  name.append(kind, document.createTextNode(r.name));
+  name.append(kind);
+  if (r.ver) {
+    const tag = document.createElement('span');
+    tag.className = 'tag ' + r.ver;
+    tag.textContent = r.ver === 'newest' ? L.verNewest : L.verOlder;
+    name.append(tag);
+  }
+  name.append(document.createTextNode(r.name));
   const dir = document.createElement('td'); dir.className = 'dir'; dir.textContent = r.dir;
   const size = document.createElement('td'); size.className = 'size'; size.textContent = r.size_text;
   const time = document.createElement('td'); time.className = 'time'; time.textContent = r.time;
-  tr.append(name, dir, size, time);
+  const loc = document.createElement('td'); loc.className = 'loc';
+  const lb = document.createElement('button');
+  lb.type = 'button'; lb.className = 'locate'; lb.textContent = '⌕';
+  lb.setAttribute('aria-label', L.locateItem(r.name)); lb.title = L.locateItem(r.name) + '\n' + L.locateTip;
+  loc.append(lb);
+  tr.append(name, dir, size, time, loc);
   return tr;
 }
 
@@ -280,7 +411,7 @@ function search(keep) {
       $('more').style.display = 'none';
       return;
     }
-    sid = j.sid; count = j.count; rows = j.rows;
+    sid = j.sid; count = j.count; rows = j.rows; versions = j.versions;
     const body = $('rows');
     body.textContent = '';
     rows.forEach(r => body.appendChild(renderRow(r)));
@@ -289,7 +420,49 @@ function search(keep) {
     select(k);
     showCount(j.ms);
     $('more').style.display = rows.length < count ? 'block' : 'none';
+    if (versions === 'pending') refreshMarks(my, 0);
   }).catch(e => { if (my === seq) setStatus(L.search_failed(e.message), 'bad'); });
+}
+
+// large results are grouped in the background: fetch the loaded rows again once the marks are ready
+function refreshMarks(my, tries) {
+  setTimeout(() => {
+    if (my !== seq || !sid || tries > 40) return;
+    const p = new URLSearchParams({page: PAGE, sid: sid, offset: 0, limit: Math.min(rows.length, 500)});
+    api('/api/rows?' + p).then(j => {
+      if (my !== seq) return;
+      if (j.versions === 'pending') { refreshMarks(my, tries + 1); return; }
+      versions = j.versions;
+      const body = $('rows');
+      j.rows.forEach(r => {
+        const old = body.children[r.k];
+        if (!old) return;
+        rows[r.k] = r;
+        const tr = renderRow(r);
+        tr.setAttribute('aria-selected', old.getAttribute('aria-selected'));
+        body.replaceChild(tr, old);
+      });
+    }).catch(() => {});
+  }, 400);
+}
+
+// make row k loaded (fetching more pages when needed), then select it
+function jumpTo(k) {
+  if (k < rows.length) { select(k, true); return; }
+  if (!sid) return;
+  if (loadingMore) { setTimeout(() => jumpTo(k), 100); return; }
+  loadingMore = true;
+  const my = seq;
+  let again = false;
+  const p = new URLSearchParams({page: PAGE, sid: sid, offset: rows.length, limit: Math.min(500, k - rows.length + 1)});
+  api('/api/rows?' + p).then(j => {
+    if (my !== seq) return;
+    const body = $('rows');
+    j.rows.forEach(r => { rows.push(r); body.appendChild(renderRow(r)); });
+    $('more').style.display = rows.length < count ? 'block' : 'none';
+    again = j.rows.length > 0;
+  }).catch(e => { if (e.status === 409) search(true); })
+    .finally(() => { loadingMore = false; if (again) jumpTo(k); });
 }
 
 function loadMore() {
@@ -308,6 +481,7 @@ function loadMore() {
 function openCurrent(folder) {
   if (cur < 0 || !sid) return;
   post(folder ? '/api/open_folder' : '/api/open', {page: PAGE, sid: sid, k: rows[cur].k})
+    .then(j => { if (folder && j.selected === false) setStatus(L.locatedFolder, 'info'); })
     .catch(e => setStatus(L.open_failed(e.message), 'bad'));
 }
 
@@ -337,6 +511,7 @@ $('q').addEventListener('keydown', ev => {
   else if (ev.key === 'Escape') { $('q').value = ''; search(false); }
 });
 $('rows').addEventListener('keydown', ev => {
+  if (ev.target.closest('button.locate') && (ev.key === 'Enter' || ev.key === ' ')) return;   // the button's own click
   const page = 10;
   const moves = {ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page};
   if (ev.key in moves) {
@@ -352,9 +527,12 @@ $('rows').addEventListener('keydown', ev => {
 });
 $('rows').addEventListener('click', ev => {
   const tr = ev.target.closest('tr');
-  if (tr) select(Array.prototype.indexOf.call($('rows').children, tr), true);
+  if (!tr) return;
+  const loc = ev.target.closest('button.locate');
+  select(Array.prototype.indexOf.call($('rows').children, tr), !loc);
+  if (loc) openCurrent(true);
 });
-$('rows').addEventListener('dblclick', ev => { if (ev.target.closest('tr')) openCurrent(false); });
+$('rows').addEventListener('dblclick', ev => { if (ev.target.closest('tr') && !ev.target.closest('button.locate')) openCurrent(false); });
 $('open').addEventListener('click', () => openCurrent(false));
 $('folder').addEventListener('click', () => openCurrent(true));
 $('copy').addEventListener('click', copyCurrent);
@@ -380,6 +558,158 @@ $('quit').addEventListener('click', () => { post('/api/quit').catch(() => {}).fi
 window.addEventListener('scroll', () => {
   if (window.innerHeight + window.scrollY >= document.body.scrollHeight - 300) loadMore();
 });
+
+
+// ---------------------------------------------------------------- settings
+let setData = null, setRootsList = [], setExcludeList = [];
+function setMsg(text, kind) { const m = $('setMsg'); m.className = kind || ''; m.textContent = text; }
+function renderItems(id, list) {
+  const ul = $(id);
+  ul.textContent = '';
+  list.forEach((item, i) => {
+    const li = document.createElement('li');
+    const span = document.createElement('span'); span.textContent = item;
+    const b = document.createElement('button'); b.type = 'button'; b.textContent = L.remove;
+    b.setAttribute('aria-label', L.removeItem(item));
+    b.addEventListener('click', () => { list.splice(i, 1); renderSettings(); setMsg(''); });
+    li.append(span, b);
+    ul.appendChild(li);
+  });
+}
+function renderSettings() {
+  renderItems('setRoots', setRootsList);
+  renderItems('setExclude', setExcludeList);
+  $('setAnyway').hidden = true;
+}
+function addTo(list, item) {
+  item = (item || '').trim();
+  if (item && !list.includes(item)) list.push(item);
+  renderSettings(); setMsg('');
+}
+function usePicker(can) {
+  $('addRoot').hidden = !can; $('addExcludeFolder').hidden = !can;
+  $('rootPath').hidden = can; $('addRootPath').hidden = can;
+}
+function openSettings() {
+  if (!alive) return;
+  closeMenu();
+  api('/api/settings').then(j => {
+    setData = j;
+    setRootsList = j.roots.slice(); setExcludeList = j.exclude.slice();
+    $('setHidden').checked = j.hidden;
+    usePicker(j.can_pick);
+    renderSettings(); setMsg('');
+    if (!$('settings').open) $('settings').showModal();
+  }).catch(e => setStatus(L.saveFailed(e.message), 'bad'));
+}
+function pick(list, button) {
+  button.disabled = true;
+  setMsg(L.picking, 'info');
+  post('/api/pick_folder', {}).then(j => {
+    if (!j.available) { usePicker(false); setMsg(L.noPicker, 'warn'); return; }
+    setMsg('');
+    if (j.path) addTo(list, j.path);
+  }).catch(e => setMsg(L.saveFailed(e.message), 'bad')).finally(() => { button.disabled = false; });
+}
+function saveSettings(force) {
+  ['setSave', 'setAnyway'].forEach(id => { $(id).disabled = true; });
+  post('/api/settings', {roots: setRootsList, exclude: setExcludeList, hidden: $('setHidden').checked, force: !!force})
+    .then(j => {
+      if (j.saved) { $('settings').close(); startApply(); return; }
+      if (j.blocked) { setMsg(L.setBlocked(j.problems[0]), 'bad'); $('setAnyway').hidden = true; return; }
+      setMsg([L.setWarn].concat(j.problems.map(p => '· ' + p)).join('\n'), 'warn');
+      $('setAnyway').hidden = false;
+    })
+    .catch(e => setMsg(L.saveFailed(e.message), 'bad'))
+    .finally(() => { ['setSave', 'setAnyway'].forEach(id => { $(id).disabled = false; }); });
+}
+function startApply() {
+  waitApply = true;
+  setStatus(L.applying, 'info');
+  clearTimeout(statusTimer); statusTimer = setTimeout(pollStatus, 300);
+}
+$('gear').addEventListener('click', openSettings);
+$('addRoot').addEventListener('click', () => pick(setRootsList, $('addRoot')));
+$('addExcludeFolder').addEventListener('click', () => pick(setExcludeList, $('addExcludeFolder')));
+$('addRootPath').addEventListener('click', () => { addTo(setRootsList, $('rootPath').value); $('rootPath').value = ''; });
+$('rootPath').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); $('addRootPath').click(); } });
+$('addRule').addEventListener('click', () => { addTo(setExcludeList, $('ruleIn').value); $('ruleIn').value = ''; });
+$('ruleIn').addEventListener('keydown', ev => { if (ev.key === 'Enter') { ev.preventDefault(); $('addRule').click(); } });
+$('setDefaults').addEventListener('click', () => {
+  if (!setData) return;
+  setRootsList = setData.defaults.roots.slice(); setExcludeList = setData.defaults.exclude.slice();
+  $('setHidden').checked = setData.defaults.hidden;
+  renderSettings(); setMsg('');
+});
+$('setHidden').addEventListener('change', () => { $('setAnyway').hidden = true; setMsg(''); });
+$('setCancel').addEventListener('click', () => $('settings').close());
+$('setSave').addEventListener('click', () => saveSettings(false));
+$('setAnyway').addEventListener('click', () => saveSettings(true));
+$('settings').addEventListener('close', () => { if (alive) $('q').focus(); });
+
+// ---------------------------------------------------------------- context menu
+function menuItems() { return Array.from($('ctx').querySelectorAll('button')).filter(b => !b.hidden); }
+function closeMenu() {
+  if ($('ctx').hidden) return;
+  $('ctx').hidden = true;
+}
+function openMenu(x, y) {
+  if (cur < 0 || !rows[cur] || !alive) return;
+  const r = rows[cur];
+  $('mJump').hidden = r.ver !== 'older';
+  $('mExclude').textContent = r.folder ? L.excludeThis : L.excludeParent;
+  $('mExclude').hidden = !r.can_exclude;
+  const m = $('ctx');
+  m.hidden = false;
+  const w = m.offsetWidth, h = m.offsetHeight;
+  m.style.left = Math.max(4, Math.min(x, window.innerWidth - w - 4)) + 'px';
+  m.style.top = Math.max(4, Math.min(y, window.innerHeight - h - 4)) + 'px';
+  menuItems()[0].focus();
+}
+function excludeCurrent() {
+  if (cur < 0 || !sid) return;
+  const r = rows[cur];
+  const target = r.folder ? r.path : r.dir;
+  if (!window.confirm(L.excludeQ(target))) return;
+  post('/api/exclude', {page: PAGE, sid: sid, k: r.k}).then(() => startApply())
+    .catch(e => setStatus(L.saveFailed(e.message), 'bad'));
+}
+$('rows').addEventListener('contextmenu', ev => {
+  const tr = ev.target.closest('tr');
+  if (!tr) return;
+  ev.preventDefault();
+  select(Array.prototype.indexOf.call($('rows').children, tr), true);
+  if (ev.clientX || ev.clientY) openMenu(ev.clientX, ev.clientY);
+  else { const b = tr.getBoundingClientRect(); openMenu(b.left + 24, b.bottom); }
+});
+$('rows').addEventListener('keydown', ev => {
+  if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) {
+    ev.preventDefault();
+    const tr = $('rows').children[cur];
+    if (tr) { const b = tr.getBoundingClientRect(); openMenu(b.left + 24, b.bottom); }
+  }
+});
+$('ctx').addEventListener('keydown', ev => {
+  const items = menuItems(), i = items.indexOf(document.activeElement);
+  if (ev.key === 'ArrowDown') { ev.preventDefault(); items[(i + 1) % items.length].focus(); }
+  else if (ev.key === 'ArrowUp') { ev.preventDefault(); items[(i - 1 + items.length) % items.length].focus(); }
+  else if (ev.key === 'Escape' || ev.key === 'Tab') { ev.preventDefault(); closeMenu(); $('rows').focus(); }
+});
+$('ctx').addEventListener('click', ev => {
+  const b = ev.target.closest('button');
+  if (!b) return;
+  closeMenu();
+  $('rows').focus();
+  if (b.id === 'mOpen') openCurrent(false);
+  else if (b.id === 'mFolder') openCurrent(true);
+  else if (b.id === 'mCopy') copyCurrent();
+  else if (b.id === 'mExclude') excludeCurrent();
+  else if (b.id === 'mJump') jumpTo(rows[cur].ver_newest);
+  else if (b.id === 'mRescan') $('rescan').click();
+});
+document.addEventListener('mousedown', ev => { if (!$('ctx').hidden && !ev.target.closest('#ctx')) closeMenu(); });
+window.addEventListener('blur', closeMenu);
+window.addEventListener('resize', closeMenu);
 
 api('/api/status').then(st => { applyLanguage(st.lang); showIndex(st); updateSortUi(); search(false); pollStatus(); })
   .catch(() => { applyLanguage('zh'); updateSortUi(); search(false); pollStatus(); });

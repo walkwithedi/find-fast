@@ -64,6 +64,14 @@ class CliTest(unittest.TestCase):
         self.assertEqual(st['state'], 'ready')
         self.assertEqual(st['entries'], 12)
 
+    def test_remove_hotkey_without_a_desktop(self):
+        # no gsettings on PATH and no desktop: nothing to remove, nothing touched
+        env = {'PATH': os.path.join(self.tmp, 'empty-bin'), 'LANG': 'en_US.UTF-8', 'HOME': self.tmp}
+        p = subprocess.run([sys.executable, os.path.join(ROOT, 'find_fast.py'), '--remove-hotkey',
+                            '--log-level', 'INFO'], capture_output=True, text=True, env=env, timeout=60)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn('global shortcut not found', p.stderr)
+
 
 if __name__ == '__main__':
     unittest.main()

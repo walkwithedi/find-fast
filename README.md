@@ -39,11 +39,14 @@ The first start builds the index, with progress in the status bar; what has been
 
 ### Global hotkey
 
-The tool does not grab keys itself; bind it in the system settings. Starting it while it is open brings the open window forward.
+Set it in the window under Settings → Shortcuts → Show or hide the window: click the button and press the keys. On saving it is written into the desktop's own custom shortcuts (Kylin UKUI or GNOME, through gsettings) and shows in the system settings; it runs `find-fast --toggle`, which hides the window when it is in front and otherwise brings it forward with the search text selected (starting it when it is not running). A hidden window keeps the index up to date; closing the window or a second Esc on an empty box quits. A combination the desktop already uses is named first, with Save anyway. Clearing it, or `bash install.sh --uninstall`, removes only the entry this tool wrote.
 
-- GNOME (Ubuntu): Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts → add, with the full path of `~/.local/bin/find-fast` as the command (for example `/home/<user>/.local/bin/find-fast`).
-- Kylin (UKUI): Settings → Devices → Shortcuts → Custom Shortcuts → add, with the same full path.
-- Without `install.sh`, use `python3 <tool folder>/find_fast.py`.
+Without `install.sh` the shortcut points at the unpacked folder (`python3 <tool folder>/find_fast.py --toggle`) and must be set again after the folder moves. On other desktops, or without gsettings, nothing is written: the settings show the command, with Copy command, to add by hand:
+
+- GNOME (Ubuntu): Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts → add, with `/home/<user>/.local/bin/find-fast --toggle` as the command.
+- Kylin (UKUI): Settings → Devices → Shortcuts → Custom Shortcuts → add, with the same command.
+
+The window's own shortcuts are under the same Settings section: Locate, Open the selected item (Enter always opens), Copy file, Copy path, Open settings, Rescan and Go to the search box. Arrows, Enter and Esc stay fixed and cannot be recorded; a shortcut needs Ctrl, Alt or Super, or is F1 to F12; two actions on the same keys cannot be saved. Changes apply at once and do not rebuild the index; Restore defaults puts back the defaults below.
 
 ### Query syntax
 
@@ -63,16 +66,36 @@ Folders appear in the results as well.
 ### Window
 
 - Type to search; ↓ moves into the list and ↑ on the first row back to the box; typing in the list continues in the box.
-- ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter opens the containing folder, with the item selected where the file manager supports it; Ctrl+C copies the path.
-- Right click or the Menu key (Shift+F10): open, open containing folder, copy path, rescan.
+- ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter locates; Ctrl+C copies the file; Ctrl+Shift+C copies the path. These are the default keys; see "Global hotkey" above for changing them.
+- Locate opens the containing folder in the file manager with the item selected (files and folders alike); where the file manager cannot select it, only the folder is opened and the status bar says so. The locate button at the end of every row locates that row.
+- Copy file puts the file or folder itself on the clipboard: pasting in a file manager gives the item, pasting in other programs its path. Only the window has it; the browser page's clipboard holds text only, so there Ctrl+C still copies the path.
+- Right click or the Menu key (Shift+F10): locate, open, copy file, copy path; after a separator Go to the newest version (on Newer exists rows), Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first and names the folder; the item is not shown when that folder is an indexed folder itself.
 - Click a column header to sort by name, path, size or modification time; click again to reverse. Newest first by default.
+- Hovering a result row shows its full path.
+- Similar versions: several versions of one file (copies, copies saved with a date or version number, drafts and finals) form a group; the newest by modification time is tagged Newest before its name and the others Newer exists. Results are shown as usual, not folded. Hovering adds a line with the group size and the newest one; right-click a Newer exists row for Go to the newest version. The rules are under "Similar versions" below.
+- The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
-- F5 or Ctrl+R rescans; Esc clears the box, and a second Esc closes the window.
-- The status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
+- F5 rescans; Ctrl+, opens Settings; Ctrl+L goes to the search box; Esc clears the box (which folds the list), and a second Esc closes the window.
+- While another program has the focus the window is 70 % opaque, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
+- Column widths, window size, maximised state, position and sort are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults; a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
+- With an empty search box only the search row shows and the window gets shorter where it is; the first character typed unfolds the result list to the height it last had unfolded, also when nothing matches (it then says No matches). Clearing the box, or Esc, folds it again. A maximised window does not fold. While folded, the right end of the search box shows "N items" or "Indexing 42%", and messages such as copy results or errors for a few seconds; hovering the box shows the full index state and the version.
+- While the list shows, the status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
+
+### Similar versions
+
+Only files are grouped, not folders, and only within the current result (across folders). From the name without its extension these marks are removed in turn, then differences of case, full- and half-width forms, spaces and brackets are ignored; files with the same remainder and the same extension form a group:
+
+- copy marks: `(1)`, `（2）`, `- 副本`, `_copy`, `copy of`;
+- a leading number: `1 `, `02_`;
+- a date at the start or end: `20260101`, `2026-01-01`, `2026.1.1`, `260101`, optionally in brackets;
+- a version number: `v2`, `V2.1`, `ver3`, `第二版`;
+- a draft word: 初稿, 二稿, 三稿, 终稿, 定稿, 修订版, 修改版, 最终版, 最终稿, final, draft.
+
+A remainder shorter than 2 characters is not grouped. The newest in a group is the latest modification time, the shorter path on a tie. Results above 100,000 are not grouped and the status bar says so; from 5,000 up the grouping runs in the background and the tags appear when it is done.
 
 ### Browser page
 
-Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next), open, open containing folder, copy path, rescan and quit.
+Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next; hovering a row shows its full path), open, locate (also a button at the end of every row), copy path, rescan, settings (the gear button), a context menu with exclusion, and quit. On the page, Add folder... opens zenity's folder chooser; without zenity the path is typed instead.
 
 The server listens on a random port of 127.0.0.1 only, and its address carries a token made at start. It exits a few seconds after the last page closes (a reload does not count), at once on Quit, and after 120 seconds when no page ever opened; a page left in a background tab does not count as closed. `--no-browser` only prints the address.
 
@@ -86,6 +109,8 @@ python3 find_fast.py QUERY...            print matching paths, newest first
   --update         rescan changed folders first; --rebuild rescan everything
   --status         index status as JSON
   --gtk / --web    choose the window or the page; --no-browser prints the page address only
+  --toggle         show the window, or hide it when it is in front (for a global shortcut)
+  --remove-hotkey  remove the show-or-hide shortcut this tool wrote into the desktop settings
   --log-level DEBUG|INFO|WARNING|ERROR    (default WARNING, or LOG_LEVEL)
 ```
 
@@ -95,7 +120,18 @@ The exit code is 1 when nothing matches and 2 for an invalid query.
 
 By default the home folder and local disks mounted under `/media` and `/mnt`. Network mounts (nfs, cifs/smb, sshfs and other FUSE file systems except local ones such as ntfs-3g and exfat) and pseudo file systems such as `/proc` and `/sys` are skipped, and symbolic links to folders are not followed.
 
-Settings live in `~/.config/find-fast/config.json`; defaults apply without it:
+The gear button beside the search box (or Ctrl+, in the window) opens Settings:
+
+- Indexed folders: remove any; Add folder... picks one in the system folder chooser.
+- Excluded: remove any; Add folder... excludes a chosen folder by path, or type a name rule (such as `node_modules` or `*.tmp`) and choose Add.
+- Index hidden files and folders: a switch.
+- Restore defaults puts the default values in the panel; nothing is written until Save.
+
+Saving checks first: an empty folder list cannot be saved; a folder that does not exist, one on a network mount, one inside another indexed folder, or an exclusion outside every indexed folder is listed with the reason, and Save anyway saves regardless. The same folder written two ways counts once, and folders under home are written as `~/...`.
+
+The index is updated in the background right after saving, and searching goes on meanwhile: when exclusions were only added, matching entries are dropped from the index without a rescan; other changes rescan (turning hidden entries on or removing an exclusion lists every folder again). Saving during a scan stops it and starts over with the new settings.
+
+Settings live in `~/.config/find-fast/config.json`, which can also be edited by hand; defaults apply without it:
 
 ```json
 {
@@ -109,7 +145,7 @@ Settings live in `~/.config/find-fast/config.json`; defaults apply without it:
 - `exclude`: entries without `/` exclude by name (wildcards `*` `?` allowed); entries with `/` or starting with `~` exclude a whole folder by path.
 - `hidden`: also index names that start with a dot.
 
-After a change of settings the next start rescans everything.
+After the file is edited by hand, the next start rescans everything.
 
 The index is `~/.cache/find-fast/index.bin`, mode 600. Sizes and times are updated when their folder changes: live through inotify while the window is open, and at the next start for changes made while it was closed. When there are more folders than the system inotify limit (`/proc/sys/fs/inotify/max_user_watches`), the rest are rescanned every 5 minutes and the status bar says so.
 
@@ -124,6 +160,9 @@ The tool reads folder listings only, never file contents, changes no file and do
 ## Changes
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused; the list folds away under an empty search box; shortcuts can be changed and a global show-or-hide shortcut set.
+- 0.1.0: first version.
 
 ## Licence
 

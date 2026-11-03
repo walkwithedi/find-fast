@@ -43,6 +43,10 @@ def build_parser():
     ap.add_argument('--gtk', action='store_true', help='open the GTK window (the default when available)')
     ap.add_argument('--web', action='store_true', help='open the browser page instead of the GTK window')
     ap.add_argument('--no-browser', action='store_true', help='with --web: print the address only')
+    ap.add_argument('--toggle', action='store_true',
+                    help='show the window, or hide it when it is in front (for a global shortcut)')
+    ap.add_argument('--remove-hotkey', action='store_true',
+                    help='remove the global shortcut this tool wrote into the desktop settings')
     ap.add_argument('--config', default=core.CONFIG_FILE, help=argparse.SUPPRESS)
     ap.add_argument('--cache', default=core.CACHE_FILE, help=argparse.SUPPRESS)
     ap.add_argument('--version', action='version', version='find-fast ' + core.VERSION)
@@ -139,6 +143,11 @@ def main(argv=None):
             s.reconfigure(errors='replace')
         except (AttributeError, ValueError):
             pass
+    if args.remove_hotkey:
+        import find_fast_gtk
+        removed = find_fast_gtk.DesktopHotkey().remove()
+        log.info('global shortcut %s', 'removed' if removed else 'not found')
+        return 0
     cli = bool(args.query) or args.count or args.status or args.rebuild or args.update
     if cli:
         return run_cli(args)

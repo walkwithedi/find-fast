@@ -307,6 +307,207 @@ class OverlayTest(TempTree):
         self.assertEqual(self.names(idx.search('x.png')), ['x.png'])
 
 
+class SettingsTest(TempTree):
+    def scope(self, roots=None, exclude=None, hidden=False):
+        return self.config.with_scope([self.root] if roots is None else roots,
+                                      core.DEFAULT_EXCLUDE if exclude is None else exclude, hidden)
+
+    def all_paths(self, idx):
+        return sorted(self.rel(idx.search('', 'path', desc=False)))
+
+    def fresh(self, config):
+        idx = core.Index(config, os.path.join(self.tmp, 'fresh.bin'), mounts={})
+        idx.refresh()
+        return idx
+
+    def test_tidy_merges_duplicates_and_uses_tilde(self):
+        home = core.HOME
+        elsewhere = os.path.join(self.tmp, 'a')
+        roots, exclude = core.tidy_scope(
+            [home, '~', home + '/x/', ' ', elsewhere, os.path.join(elsewhere, '..', 'a')],
+            ['node_modules', ' node_modules ', '~/x/y', home + '/x/y', '*.tmp', ''])
+        self.assertEqual(roots, ['~', '~/x', elsewhere])
+        self.assertEqual(exclude, ['node_modules', '~/x/y', '*.tmp'])
+        # a sibling whose name starts like the home folder is not under it
+        fake_home = os.path.join(self.tmp, 'h')
+        self.assertEqual(core.to_tilde(fake_home + '2', home=fake_home), fake_home + '2')
+        self.assertEqual(core.to_tilde(fake_home + '/d', home=fake_home), '~/d')
+
+    def test_check_scope(self):
+        docs = os.path.join(self.root, 'docs')
+        self.assertEqual(core.check_scope([], []), [('roots', '', 'no_roots')])
+        missing = os.path.join(self.tmp, 'gone')
+        got = core.check_scope([self.root, docs, missing],
+                               ['node_modules', os.path.join(self.tmp, 'elsewhere'), os.path.join(docs, 'old'), '/'],
+                               mounts={})
+        self.assertIn(('roots', docs, 'nested'), got)
+        self.assertIn(('roots', missing, 'missing'), got)
+        self.assertIn(('exclude', os.path.join(self.tmp, 'elsewhere'), 'missing'), got)
+        self.assertIn(('exclude', '/', 'outside'), got)
+        self.assertNotIn(('exclude', os.path.join(docs, 'old'), 'outside'), got)
+        self.assertFalse(any(item == 'node_modules' for _, item, _ in got))
+        net = core.check_scope([docs], [], mounts={self.root: 'nfs4'})
+        self.assertEqual(net, [('roots', docs, 'network')])
+        self.assertEqual(core.check_scope([docs], [], mounts={self.root: 'ext4'}), [])
+        for code in ('no_roots', 'missing', 'network', 'nested', 'outside'):
+            for lang in ('zh', 'en'):
+                self.assertTrue(core.scope_problem_text('x', code, lang))
+
+    def test_config_keeps_other_keys(self):
+        path = os.path.join(self.tmp, 'c.json')
+        c = core.Config(path, {'roots': ['~'], 'keys': {'locate': '<Primary>Return'}})
+        c2 = c.with_scope([self.root], [], True)
+        c2.save()
+        c3 = core.Config(path)
+        self.assertEqual(c3.roots, [self.root])
+        self.assertTrue(c3.hidden)
+        self.assertEqual(c3.other, {'keys': {'locate': '<Primary>Return'}})
+
+    def test_added_exclusions_pruned_like_a_fresh_scan(self):
+        idx = self.index()
+        touch(os.path.join(self.root, 'docs', 'new.tmp'), b'', 1700000900)
+        idx.apply_changes([os.path.join(self.root, 'docs')])
+        new = self.scope(exclude=core.DEFAULT_EXCLUDE + [os.path.join(self.root, 'docs', 'old'), 'IMG_*'])
+        self.assertEqual(idx.reconfigure(new), 'pruned')
+        got = self.all_paths(idx)
+        self.assertEqual(got, self.all_paths(self.fresh(new)))
+        self.assertNotIn('docs/old', got)
+        self.assertNotIn('docs/old/report-2019.pdf', got)
+        self.assertNotIn('pics/IMG_0001.jpg', got)
+        self.assertIn('docs/new.tmp', got)
+        # the cache now belongs to the new settings
+        again = core.Index(new, self.cache, mounts={})
+        self.assertTrue(again.load())
+        self.assertEqual(self.all_paths(again), got)
+
+    def test_folder_name_exclusion_pruned(self):
+        idx = self.index()
+        new = self.scope(exclude=core.DEFAULT_EXCLUDE + ['docs'])
+        self.assertEqual(idx.reconfigure(new), 'pruned')
+        self.assertEqual(self.all_paths(idx), self.all_paths(self.fresh(new)))
+        self.assertFalse(any(p.startswith('docs') for p in self.all_paths(idx)))
+
+    def test_other_changes_rescan(self):
+        idx = self.index()
+        self.assertEqual(idx.reconfigure(self.scope()), 'same')
+        new = self.scope(hidden=True)
+        self.assertEqual(idx.reconfigure(new), 'rescanned')
+        self.assertIn('.hidden/secret-report.txt', self.all_paths(idx))
+        new = self.scope(exclude=[], hidden=True)
+        self.assertEqual(idx.reconfigure(new), 'rescanned')
+        self.assertIn('node_modules/pkg/report.js', self.all_paths(idx))
+        other = os.path.join(self.tmp, 'other')
+        touch(os.path.join(other, 'extra-file.txt'))
+        new = self.scope(roots=[self.root, other], exclude=[], hidden=True)
+        self.assertEqual(idx.reconfigure(new), 'rescanned')
+        found = [p for p in self.rel(idx.search('extra-file'))]
+        self.assertEqual(found, [os.path.join('..', 'other', 'extra-file.txt')])
+        self.assertEqual(self.all_paths(idx), self.all_paths(self.fresh(new)))
+
+    def test_reused_folders_follow_new_exclusions(self):
+        idx = self.index()
+        new = self.scope(roots=[self.root, os.path.join(self.tmp, 'nothing-here')],
+                         exclude=core.DEFAULT_EXCLUDE + ['pics'])
+        idx.config = new
+        idx.refresh()
+        self.assertFalse(any(p.startswith('pics') for p in self.all_paths(idx)))
+
+    def test_waits_for_a_scan_already_running(self):
+        idx = self.index()
+        idx.state = 'scanning'          # as if another rescan were running
+        out = []
+        t = threading.Thread(target=lambda: out.append(idx.reconfigure(self.scope(hidden=True))))
+        t.start()
+        time.sleep(0.3)
+        self.assertEqual(out, [])
+        idx.state = 'ready'
+        t.join(10)
+        self.assertEqual(out, ['rescanned'])
+        self.assertIn('.hidden/secret-report.txt', self.all_paths(idx))
+
+    def test_stopped_rescan(self):
+        idx = self.index()
+        stop = threading.Event()
+        stop.set()
+        self.assertEqual(idx.reconfigure(self.scope(hidden=True), stop=stop), 'stopped')
+        self.assertEqual(idx.state, 'ready')
+
+
+class VersionTest(TempTree):
+    SAME = ['示例方案.docx', '示例方案(1).docx', '示例方案（2）.docx', '【20260101】示例方案.docx',
+            '2026-01-01_示例方案.docx', '示例方案_20260101.docx', '示例方案_v2.docx', '示例方案 V2.1.docx',
+            '示例方案第二版.docx', '示例方案-终稿.docx', '（初稿）示例方案.docx', '示例方案 final.docx',
+            '1 示例方案.docx', '02_示例方案.docx', '示例方案 - 副本.docx', '示例方案_copy.docx',
+            'Copy of 示例方案.docx', '［示例方案］.docx', '示例 方案.docx', '2026-01-01_示例方案_V2.1(1).docx']
+
+    def test_marks_group_together(self):
+        keys = {core.version_key(n) for n in self.SAME}
+        self.assertEqual(len(keys), 1, keys)
+        self.assertIsNotNone(keys.pop())
+
+    def test_not_grouped(self):
+        k = core.version_key('示例方案.docx')
+        self.assertNotEqual(core.version_key('示例方案.pdf'), k)            # another extension
+        self.assertNotEqual(core.version_key('示例计划.docx'), k)            # another stem
+        self.assertNotEqual(core.version_key('Report 2024.pdf'), core.version_key('Report 2025.pdf'))
+        self.assertIsNone(core.version_key('1.docx'))                       # too short once marks go
+        self.assertIsNone(core.version_key('v2.docx'))
+        self.assertIsNone(core.version_key('a(1).txt'))
+        self.assertEqual(core.version_key('Plan.DOCX'), core.version_key('plan_v3.docx'))
+
+    def make_versions(self):
+        d = os.path.join(self.root, 'v')
+        touch(os.path.join(d, '示例方案.docx'), b'', 1700001000)
+        touch(os.path.join(d, 'a', '示例方案_v2.docx'), b'', 1700003000)           # newest
+        touch(os.path.join(d, 'b', '示例方案-终稿.docx'), b'', 1700002000)
+        touch(os.path.join(d, '示例方案(1)', 'x.txt'), b'', 1700004000)              # a folder: not grouped
+        touch(os.path.join(d, 'c', '示例方案.pdf'), b'', 1700005000)                 # other extension
+        touch(os.path.join(d, 'tie', 'ab', '同时.txt'), b'', 1700006000)
+        touch(os.path.join(d, 'tie', '同时(1).txt'), b'', 1700006000)               # same time, shorter path wins
+        return self.index()
+
+    def test_groups_in_a_result(self):
+        idx = self.make_versions()
+        for sort, desc in (('mtime', True), ('name', False), ('path', False)):
+            res = idx.search('示例方案', sort, desc)
+            g = core.VersionGroups(res)
+            marks = {os.path.relpath(res.path(k), self.root): g.mark(k) for k in range(len(res))}
+            self.assertEqual(marks['v/a/示例方案_v2.docx'], 'newest')
+            self.assertEqual(marks['v/示例方案.docx'], 'older')
+            self.assertEqual(marks['v/b/示例方案-终稿.docx'], 'older')
+            self.assertIsNone(marks['v/示例方案(1)'])
+            self.assertIsNone(marks['v/c/示例方案.pdf'])
+            k = [k for k in range(len(res)) if res.path(k).endswith('示例方案.docx')][0]
+            self.assertEqual(res.path(g.newest(k)), os.path.join(self.root, 'v', 'a', '示例方案_v2.docx'))
+            self.assertEqual(g.size(k), 3)
+        res = idx.search('同时')
+        g = core.VersionGroups(res)
+        self.assertEqual(res.path(g.newest(0)), os.path.join(self.root, 'v', 'tie', '同时(1).txt'))
+
+    def test_limit_and_stop(self):
+        idx = self.make_versions()
+        res = idx.search('示例方案')
+        self.assertTrue(core.VersionGroups(res, limit=2).skipped)
+        g = core.VersionGroups(res, stop=lambda: True)
+        self.assertTrue(g.skipped)
+        self.assertIsNone(g.mark(0))
+
+    def test_grouping_100k_rows_is_quick(self):
+        sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'scripts'))
+        import bench
+        idx = core.Index(self.config, self.cache, mounts={})
+        idx.base = core.build_base(bench.synthetic_records(core.VERSION_GROUP_LIMIT - 1000))
+        idx._reset_overlay()
+        res = idx.search('')
+        self.assertLessEqual(len(res), core.VERSION_GROUP_LIMIT)
+        t = time.perf_counter()
+        g = core.VersionGroups(res)
+        took = time.perf_counter() - t
+        sys.stderr.write('\ngrouping %d rows: %.2f s\n' % (len(res), took))
+        self.assertFalse(g.skipped)
+        self.assertLess(took, 5.0)
+
+
 class WatcherTest(TempTree):
     def test_inotify_updates_index(self):
         idx = self.index()

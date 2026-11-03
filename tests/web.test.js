@@ -22,12 +22,17 @@ function startServer(tmp, lang) {
   touch(path.join(root, 'docs', 'report-draft.docx'), 'x'.repeat(20), 1700000200);
   touch(path.join(root, 'docs', 'old', 'report-2019.pdf'), 'x', 1600000000);
   touch(path.join(root, 'pics', '项目报告.pptx'), 'x', 1700000500);
+  touch(path.join(root, 'v', '示例方案.docx'), 'x', 1700000600);
+  touch(path.join(root, 'v', 'a', '示例方案_v2.docx'), 'x', 1700000800);
+  touch(path.join(root, 'v', 'b', '示例方案-终稿.docx'), 'x', 1700000700);
   for (let i = 0; i < 450; i++) touch(path.join(root, 'many', 'item-' + String(i).padStart(3, '0') + '.txt'), '', 1500000000 + i);
   fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({roots: [root]}));
   const bin = path.join(tmp, 'bin');
   fs.mkdirSync(bin);
   const log = path.join(tmp, 'opened.txt');
   fs.writeFileSync(path.join(bin, 'xdg-open'), '#!/bin/sh\necho "$1" >> "' + log + '"\n', {mode: 0o755});
+  // a stand-in folder chooser that always answers the pics folder
+  fs.writeFileSync(path.join(bin, 'zenity'), '#!/bin/sh\necho "' + path.join(root, 'pics') + '"\n', {mode: 0o755});
   const env = Object.assign({}, process.env, {LANG: lang, LC_ALL: '', LANGUAGE: '', PATH: bin + ':' + process.env.PATH});
   const proc = spawn('python3', [path.join(ROOT, 'find_fast.py'), '--web', '--no-browser',
     '--config', path.join(tmp, 'config.json'), '--cache', path.join(tmp, 'index.bin')], {env});
@@ -81,6 +86,10 @@ async function rowNames(page) {
     await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
     assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf', 'report-draft.docx', 'report-2019.pdf']);
     assert.strictEqual(await page.getAttribute('#status', 'aria-live'), 'polite');
+    // hovering a row shows its full path
+    assert.deepStrictEqual(await page.$$eval('#rows tr', trs => trs.map(tr => tr.title)),
+      [path.join(srv.root, 'docs', 'Report 2024.pdf'), path.join(srv.root, 'docs', 'report-draft.docx'),
+       path.join(srv.root, 'docs', 'old', 'report-2019.pdf')]);
 
     // keyboard: down, enter opens, ctrl+enter opens the folder, ctrl+c copies
     await page.press('#q', 'ArrowDown');
@@ -90,6 +99,23 @@ async function rowNames(page) {
     await page.waitForFunction(() => true);
     for (let i = 0; i < 50 && !fs.existsSync(srv.log); i++) await page.waitForTimeout(100);
     assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim(), path.join(srv.root, 'docs', 'report-draft.docx'));
+    // the locate button at the end of a row; without a file manager service the folder is opened
+    assert.strictEqual(await page.textContent('#folder'), '定位');
+    assert.strictEqual(await page.getAttribute('#rows tr:nth-child(1) button.locate', 'aria-label'), '定位 Report 2024.pdf');
+    await page.click('#rows tr:nth-child(1) button.locate');
+    for (let i = 0; i < 50 && fs.readFileSync(srv.log, 'utf8').trim().split('\n').length < 2; i++) await page.waitForTimeout(100);
+    assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim().split('\n')[1], path.join(srv.root, 'docs'));
+    await page.waitForFunction(() => /已打开所在文件夹/.test(document.getElementById('status').textContent));
+    assert.strictEqual(await page.$eval('tr[aria-selected="true"] td.name', td => td.textContent), 'Report 2024.pdf');
+    await page.focus('#rows tr:nth-child(1) button.locate');
+    await page.keyboard.press('Tab');
+    assert.strictEqual(await page.evaluate(() => document.activeElement.closest('tr').querySelector('td.name').textContent), 'report-draft.docx');
+    assert.ok(await page.evaluate(() => document.activeElement.matches(':focus-visible')
+      && getComputedStyle(document.activeElement).outlineStyle !== 'none'));
+    await page.keyboard.press('Enter');
+    for (let i = 0; i < 50 && fs.readFileSync(srv.log, 'utf8').trim().split('\n').length < 3; i++) await page.waitForTimeout(100);
+    assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim().split('\n').length, 3);
+    await page.click('#rows tr:nth-child(2) td.name');
     await page.keyboard.press('Control+c');
     await page.waitForFunction(() => /已复制路径/.test(document.getElementById('status').textContent));
     assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), path.join(srv.root, 'docs', 'report-draft.docx'));
@@ -97,9 +123,10 @@ async function rowNames(page) {
 
     // sort by name through the header, then the select
     await page.click('#hName');
-    await page.waitForFunction(() => document.querySelector('#rows td.name').textContent === 'Report 2024.pdf'
+    // wait for the re-sorted rows themselves: the first row is the same in both orders
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#rows td.name'), td => td.textContent).join('|')
+      === 'Report 2024.pdf|report-2019.pdf|report-draft.docx'
       && document.querySelector('th[data-sort="name"]').getAttribute('aria-sort') === 'ascending');
-    assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf', 'report-2019.pdf', 'report-draft.docx']);
     await page.selectOption('#sort', 'size:1');
     await page.waitForFunction(() => document.querySelector('th[data-sort="size"]').getAttribute('aria-sort') === 'descending');
 
@@ -115,6 +142,83 @@ async function rowNames(page) {
     assert.strictEqual((await rowNames(page)).length, 200);
     await page.click('#more');
     await page.waitForFunction(() => document.querySelectorAll('#rows tr').length === 400);
+
+    // similar versions: tags, the hover line and "go to the newest version"
+    await page.selectOption('#sort', 'mtime:1');
+    await page.fill('#q', '示例方案');
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+    assert.deepStrictEqual(await page.$$eval('#rows tr', trs => trs.map(tr => (tr.querySelector('.tag') || {}).textContent)),
+      ['最新', '有更新版', '有更新版']);
+    assert.match(await page.getAttribute('#rows tr:nth-child(3)', 'title'), /\n同组共 3 个类似版本，最新：.*示例方案_v2\.docx$/);
+    await page.click('#rows tr:nth-child(3)', {button: 'right'});
+    assert.ok(await page.isVisible('#mJump'));
+    await page.click('#mJump');
+    await page.waitForFunction(() => document.querySelector('tr[aria-selected="true"] td.name').textContent.endsWith('示例方案_v2.docx'));
+    await page.click('#rows tr:nth-child(1)', {button: 'right'});
+    assert.ok(await page.isHidden('#mJump'));
+    await page.keyboard.press('Escape');
+
+    // right-click a row: exclude its folder after confirming
+    await page.fill('#q', 'report-2019');
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
+    await page.click('#rows tr', {button: 'right'});
+    assert.ok(await page.isVisible('#ctx'));
+    assert.strictEqual(await page.textContent('#mExclude'), '排除所在文件夹');
+    assert.deepStrictEqual(await page.$$eval('#ctx button:not([hidden])', bs => bs.map(b => b.textContent)),
+      ['定位', '打开', '复制路径', '排除所在文件夹', '重新扫描']);
+    assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'mFolder');
+    let asked = '';
+    page.once('dialog', d => { asked = d.message(); d.accept(); });
+    await page.click('#mExclude');
+    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('status').textContent));
+    assert.ok(asked.includes(path.join(srv.root, 'docs', 'old')), asked);
+    assert.ok(await page.isHidden('#ctx'));
+    await page.fill('#q', 'report-2019');
+    await page.waitForFunction(() => /^0 个结果/.test(document.getElementById('status').textContent));
+    // a folder row offers "exclude this folder"; Escape closes the menu
+    await page.fill('#q', 'pics');
+    await page.waitForFunction(() => document.querySelector('#rows td.name') && /pics/.test(document.querySelector('#rows td.name').textContent));
+    await page.click('#rows tr', {button: 'right'});
+    assert.strictEqual(await page.textContent('#mExclude'), '排除此文件夹');
+    assert.ok(await page.isHidden('#mJump'));
+    await page.keyboard.press('Escape');
+    assert.ok(await page.isHidden('#ctx'));
+
+    // settings: pick a folder, add a name rule, save
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setRoots li').length === 1);
+    assert.strictEqual(await page.textContent('#setRoots li span'), srv.root);
+    await page.click('#addExcludeFolder');
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#setExclude li span'), x => x.textContent).some(t => /pics$/.test(t)));
+    await page.fill('#ruleIn', '*.docx');
+    await page.press('#ruleIn', 'Enter');
+    assert.ok((await page.$$eval('#setExclude li span', xs => xs.map(x => x.textContent))).includes('*.docx'));
+    // a path that does not exist is listed first; Save anyway is offered
+    await page.fill('#ruleIn', path.join(srv.root, 'no-such-folder'));
+    await page.click('#addRule');
+    await page.click('#setSave');
+    await page.waitForFunction(() => document.getElementById('setMsg').className === 'warn');
+    assert.ok(await page.isVisible('#setAnyway'));
+    assert.match(await page.textContent('#setMsg'), /no-such-folder/);
+    await page.setViewportSize({width: 360, height: 700});
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 360), 'horizontal scroll with settings open');
+    await page.setViewportSize({width: 1100, height: 800});
+    await page.click('#setAnyway');
+    await page.waitForFunction(() => !document.getElementById('settings').open);
+    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('status').textContent));
+    await page.fill('#q', 'report');
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
+    assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf']);
+    const saved = JSON.parse(fs.readFileSync(path.join(path.dirname(srv.root), 'config.json'), 'utf8'));
+    assert.ok(saved.exclude.includes('*.docx') && saved.exclude.includes(path.join(srv.root, 'pics')));
+    // empty folder list cannot be saved
+    await page.click('#gear');
+    await page.waitForFunction(() => document.getElementById('settings').open);
+    await page.click('#setRoots li button');
+    await page.click('#setSave');
+    await page.waitForFunction(() => document.getElementById('setMsg').className === 'bad');
+    assert.ok(await page.isHidden('#setAnyway'));
+    await page.click('#setCancel');
 
     // narrow screen: no horizontal page scroll; dark mode colours
     await page.setViewportSize({width: 360, height: 700});

@@ -31,6 +31,7 @@ import struct
 import sys
 import threading
 import time
+import unicodedata
 
 log = logging.getLogger('find_fast_core')
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s'
@@ -88,6 +89,11 @@ STRINGS = {
         'watch_on': '实时更新',
         'watch_limited': '部分文件夹定时更新（监听数已达系统上限）',
         'watch_off': '定时更新',
+        'scope_no_roots': '至少要有一个索引的文件夹',
+        'scope_missing': '{item}：文件夹不存在',
+        'scope_network': '{item}：在网络挂载或系统伪文件系统上，不会被索引',
+        'scope_nested': '{item}：包含在另一个索引的文件夹里，只按外层的算',
+        'scope_outside': '{item}：不在任何索引的文件夹里，这条排除不起作用',
     },
     'en': {
         'app_name': 'find-fast',
@@ -100,6 +106,11 @@ STRINGS = {
         'watch_on': 'live updates',
         'watch_limited': 'some folders updated periodically (system watch limit reached)',
         'watch_off': 'periodic updates',
+        'scope_no_roots': 'At least one folder must be indexed',
+        'scope_missing': '{item}: the folder does not exist',
+        'scope_network': '{item}: on a network mount or system pseudo file system, so it is not indexed',
+        'scope_nested': '{item}: inside another indexed folder; only the outer one counts',
+        'scope_outside': '{item}: not inside any indexed folder, so this exclusion has no effect',
     },
 }
 
@@ -159,6 +170,8 @@ class Config:
         self.roots = self._strings(data.get('roots'), DEFAULT_ROOTS)
         self.exclude = self._strings(data.get('exclude'), DEFAULT_EXCLUDE)
         self.hidden = bool(data.get('hidden', False))
+        # other keys (interface settings) are kept as they are and written back on save
+        self.other = {k: v for k, v in data.items() if k not in ('roots', 'exclude', 'hidden')}
 
     @staticmethod
     def _strings(value, default):
@@ -167,7 +180,15 @@ class Config:
         return [v for v in value if isinstance(v, str) and v.strip()]
 
     def data(self):
-        return {'roots': self.roots, 'exclude': self.exclude, 'hidden': self.hidden}
+        out = dict(self.other)
+        out.update({'roots': self.roots, 'exclude': self.exclude, 'hidden': self.hidden})
+        return out
+
+    def with_scope(self, roots, exclude, hidden):
+        """A copy of this configuration (same file, same other keys) with a new index scope."""
+        data = self.data()
+        data.update({'roots': list(roots), 'exclude': list(exclude), 'hidden': bool(hidden)})
+        return Config(self.path, data)
 
     def save(self):
         write_private(self.path, json.dumps(self.data(), ensure_ascii=False, indent=2).encode('utf-8'))
@@ -193,6 +214,99 @@ class Config:
 
     def excluder(self):
         return Excluder(self.exclude, self.hidden)
+
+
+# ---------------------------------------------------------------- settings checks
+
+def is_path_rule(rule):
+    """An exclusion that names a folder (has / or starts with ~) rather than a name pattern."""
+    rule = rule.strip()
+    return '/' in rule or rule.startswith('~')
+
+
+def expand(path):
+    return os.path.normpath(os.path.expanduser(path.strip()))
+
+
+def to_tilde(path, home=None):
+    """Write a folder under the home folder as ~ or ~/..., others as they are (normalised)."""
+    home = (home or HOME).rstrip('/') or '/'
+    p = expand(path)
+    if p == home:
+        return '~'
+    if home != '/' and p.startswith(home + '/'):
+        return '~/' + p[len(home) + 1:]
+    return p
+
+
+def tidy_scope(roots, exclude):
+    """(roots, exclude) without blanks and duplicates (the same folder written two ways counts
+    once; the first spelling is kept), folders under home written with ~."""
+    out_r, seen = [], set()
+    for r in roots:
+        if not isinstance(r, str) or not r.strip():
+            continue
+        key = expand(r)
+        if key not in seen:
+            seen.add(key)
+            out_r.append(to_tilde(r))
+    out_e, seen = [], set()
+    for e in exclude:
+        if not isinstance(e, str) or not e.strip():
+            continue
+        e = e.strip()
+        key = ('p', expand(e)) if is_path_rule(e) else ('n', e)
+        if key not in seen:
+            seen.add(key)
+            out_e.append(to_tilde(e) if is_path_rule(e) else e)
+    return out_r, out_e
+
+
+def fs_type_of(path, mounts):
+    """File system type of the mount that holds path (longest mount point prefix), or None."""
+    best, kind = '', None
+    for point, fstype in mounts.items():
+        p = point.rstrip('/') or '/'
+        if (path == p or p == '/' or path.startswith(p + '/')) and len(p) > len(best):
+            best, kind = p, fstype
+    return kind
+
+
+def under(path, folder):
+    return path == folder or path.startswith(folder.rstrip('/') + '/')
+
+
+def check_scope(roots, exclude, mounts=None):
+    """Problems with an index scope, as (list, item, code) tuples: list is 'roots' or 'exclude';
+    code is 'no_roots' (nothing to index: may not be saved), 'missing', 'network', 'nested' or
+    'outside' (worth a warning; saving anyway is allowed)."""
+    mounts = read_mounts() if mounts is None else mounts
+    if not roots:
+        return [('roots', '', 'no_roots')]
+    out = []
+    paths = [(r, expand(r)) for r in roots]
+    for r, p in paths:
+        if not os.path.isdir(p):
+            out.append(('roots', r, 'missing'))
+            continue
+        kind = fs_type_of(p, mounts)
+        if kind is not None and fs_excluded(kind):
+            out.append(('roots', r, 'network'))
+        if any(q != p and under(p, q) for _, q in paths):
+            out.append(('roots', r, 'nested'))
+    for e in exclude:
+        if not is_path_rule(e):
+            continue
+        p = expand(e)
+        if not os.path.exists(p):
+            out.append(('exclude', e, 'missing'))
+        elif not any(under(p, q) for _, q in paths):
+            out.append(('exclude', e, 'outside'))
+    return out
+
+
+def scope_problem_text(item, code, lang=None):
+    return text('scope_' + code, lang, item=display(item))
 
 
 class Excluder:
@@ -529,6 +643,45 @@ def list_dir(d, excluder):
     return entries, subs
 
 
+def keep_entry(folder, entry, excluder):
+    """True when an entry (name, size, mtime) of folder passes the exclusions, as list_dir judges."""
+    name, size, _ = entry
+    if excluder.skip_name(name):
+        return False
+    return not (size == -1 and excluder.skip_path(os.path.join(folder, name)))
+
+
+def prune_records(base, extra_dirs, dead, roots, excluder):
+    """Records (as scan returns them) of the index as it is now (base plus overlay), less what
+    the exclusions skip, without touching the disk. Folders only in the overlay are not included
+    (their parents keep them as entries); returns (records, overlay folders to list again)."""
+    records, skipped = [], set()
+    roots = [r.rstrip('/') or '/' for r in roots]
+    for di, d in enumerate(base.dirs):
+        if not any(under(d, r) for r in roots) or excluder.skip_path(d):
+            skipped.add(d)
+            continue
+        if d not in roots and (d in skipped or os.path.dirname(d) in skipped):
+            skipped.add(d)
+            continue
+        if d in extra_dirs:
+            entries = extra_dirs[d]
+        elif di in dead:
+            continue
+        else:
+            entries = base.entries_of(di)
+        kept = [e for e in entries if keep_entry(d, e, excluder)]
+        names = {n for n, s, _ in kept if s == -1}
+        for n, s, _ in entries:
+            if s == -1 and n not in names:
+                skipped.add(os.path.join(d, n))
+        records.append((d, base.dir_mtime[di], kept))
+    have = {r[0] for r in records}
+    relist = [d for d in extra_dirs if d not in have and d not in skipped
+              and not any(under(d, s) for s in skipped)]
+    return records, relist
+
+
 def scan(roots, excluder, mounts=None, old=None, progress=None, stop=None):
     """Walk roots depth first. Folders whose mtime is unchanged since `old` (a Base) are reused
     without listing them. Returns (records, unreadable folders, changed)."""
@@ -559,7 +712,8 @@ def scan(roots, excluder, mounts=None, old=None, progress=None, stop=None):
                 continue
             oi = old_index.get(d)
             if oi is not None and old.dir_mtime[oi] == st.st_mtime_ns:
-                entries = old.entries_of(oi)
+                # reused without listing; the exclusions may be newer than the listing
+                entries = [e for e in old.entries_of(oi) if keep_entry(d, e, excluder)]
                 subs = [os.path.join(d, name) for name, size, _ in entries if size == -1]
             else:
                 changed = True
@@ -1235,6 +1389,67 @@ class Index:
                 self.touched = None
             self._notify()
 
+    def reconfigure(self, config, stop=None):
+        """Use a new index scope. When only exclusions were added (same folders, same hidden
+        setting) the excluded entries are dropped from the index without touching the disk;
+        otherwise the folders are rescanned, from scratch when hidden entries or dropped
+        exclusions need folders listed again. Returns 'same', 'pruned' or 'rescanned' (or
+        'stopped' when stop was set)."""
+        with self.lock:
+            old = self.config
+            self.config = config
+            ready = self.state == 'ready'
+        same_roots = old.resolved_roots() == config.resolved_roots()
+        added_only = set(old.exclude) <= set(config.exclude)
+        if same_roots and old.hidden == config.hidden and added_only and ready:
+            if set(old.exclude) == set(config.exclude):
+                if old.signature() != config.signature():
+                    self._save_current()
+                return 'same'
+            self._prune()
+            return 'pruned'
+        full = (config.hidden and not old.hidden) or not added_only
+        # a scan started elsewhere (a rescan, an inotify overflow) runs with the old settings:
+        # wait for it, then scan with the new ones
+        while self.state == 'scanning':
+            if stop is not None and stop.wait(0.1):
+                return 'stopped'
+            if stop is None:
+                time.sleep(0.1)
+        done = self.refresh_and_watch(full=full, stop=stop)
+        return 'rescanned' if done else 'stopped'
+
+    def _save_current(self):
+        with self.lock:
+            base, meta = self.base, {'scanned_at': self.scanned_at, 'unreadable': self.unreadable_count}
+        try:
+            save_base(base, self.cache_path, self.config.signature(), meta)
+        except OSError as e:
+            log.warning('cannot write cache %s: %s', self.cache_path, e)
+
+    def _prune(self):
+        """Drop excluded entries; the new base is built outside the lock so searches go on."""
+        t = time.monotonic()
+        with self.lock:
+            old, extra_dirs, dead = self.base, dict(self.extra_dirs), set(self.dead)
+            roots, exc = self.config.resolved_roots(), self.config.excluder()
+        records, relist = prune_records(old, extra_dirs, dead, roots, exc)
+        base = build_base(records)
+        del records
+        with self.lock:
+            # folders that changed while the base was built are listed again below
+            later = [d for d, v in self.extra_dirs.items() if extra_dirs.get(d) is not v]
+            self.base = base
+            self._reset_overlay()
+        relist = sorted(set(relist) | set(later))
+        self._save_current()
+        if relist:
+            self.apply_changes(relist)
+        if self.watcher is not None:
+            self.watcher.sync(self.known_dirs())
+        log.info('exclusions applied in %.2fs: %d entries', time.monotonic() - t, self.base.n)
+        self._notify()
+
     def _notify(self):
         cb = self.on_change
         if cb is not None:
@@ -1571,6 +1786,101 @@ class Watcher:
                     self.on_dirty(batch, flag)
                 except Exception:
                     log.exception('handling changes failed')
+
+
+# ---------------------------------------------------------------- similar versions
+#
+# Files whose names differ only by version marks (copies, sequence numbers, dates, version
+# numbers, draft words) are one group. The rules are listed here in one place.
+
+VERSION_GROUP_LIMIT = 100000    # results above this are not grouped
+VERSION_MIN_STEM = 2            # stems shorter than this after normalising are not grouped
+_D = r'(?:\d{8}|\d{6}|\d{4}[-./年]\d{1,2}[-./月]\d{1,2}日?)'           # a date
+_DRAFT = r'(?:初稿|二稿|三稿|终稿|定稿|修订版|修改版|最终版|最终稿|final|draft)'
+_VER = r'(?:(?:v|ver|version)\s*\d+(?:\.\d+)*|第[\d一二三四五六七八九十]+版)'
+_SEP = r'[\s_\-.,、:：·~]'
+VERSION_MARKS = [re.compile(p) for p in (
+    r'^copy of ',                                   # copy of x
+    r'\s*-?\s*(?:副本|copy)(?:\s*\(?\d+\)?)?$',     # x - 副本, x_copy, x copy 2
+    r'\s*\(\d+\)$',                                 # x(1), x (2)
+    r'^\d{1,3}' + _SEP + r'+',                      # 1 x, 02_x
+    r'^\(?' + _D + r'\)?' + _SEP + r'*',            # (20260101)x, 2026-01-01_x
+    _SEP + r'*\(?' + _D + r'\)?$',                  # x_20260101
+    r'^\(?' + _DRAFT + r'\)?' + _SEP + r'*',        # (draft)x
+    _SEP + r'*\(?' + _DRAFT + r'\)?$',              # x-终稿
+    _SEP + r'*\(?' + _VER + r'\)?$',                # x_v2, x第二版
+    r'^\(?' + _VER + r'\)?' + _SEP + r'*',          # v2 x
+)]
+_BRACKETS = str.maketrans('[]【】{}《》<>〔〕', '()()()()()()')
+_IGNORED = re.compile(r'[\s()_\-.,、:：·~]+')
+_version_keys = {}
+
+
+def version_key(name):
+    """Group key of a file name, or None when the name is not grouped (too short a stem)."""
+    key = _version_keys.get(name)
+    if key is not None or name in _version_keys:
+        return key
+    stem, ext = os.path.splitext(display(name))
+    s = unicodedata.normalize('NFKC', stem).lower().translate(_BRACKETS).strip()
+    while True:
+        before = s
+        for rx in VERSION_MARKS:
+            s = rx.sub('', s).strip()
+        if s == before:
+            break
+    s = _IGNORED.sub('', s)
+    key = (s + '\0' + unicodedata.normalize('NFKC', ext).lower()) if len(s) >= VERSION_MIN_STEM else None
+    if len(_version_keys) > 500000:
+        _version_keys.clear()
+    _version_keys[name] = key
+    return key
+
+
+class VersionGroups:
+    """Similar versions among the rows of a Result. mark(k) is 'newest', 'older' or None;
+    newest(k) is the row of the newest version in k's group; size(k) the number in it."""
+
+    def __init__(self, result, limit=None, stop=None):
+        self.skipped = len(result) > (VERSION_GROUP_LIMIT if limit is None else limit)
+        self.of = {}                # row -> group number
+        self.groups = []            # group number -> (newest row, size)
+        if self.skipped:
+            return
+        keyed = {}
+        row = result.row
+        for k in range(len(result)):
+            if stop is not None and k % 4096 == 0 and stop():
+                self.skipped = True
+                return
+            name, folder, size, mtime = row(k)
+            if size < 0:
+                continue
+            key = version_key(name)
+            if key is not None:
+                keyed.setdefault(key, []).append((k, mtime, folder, name))
+        for members in keyed.values():
+            if len(members) < 2:
+                continue
+            best = max(members, key=lambda m: (m[1], -len(os.path.join(m[2], m[3])), -m[0]))
+            g = len(self.groups)
+            self.groups.append((best[0], len(members)))
+            for m in members:
+                self.of[m[0]] = g
+
+    def mark(self, k):
+        g = self.of.get(k)
+        if g is None:
+            return None
+        return 'newest' if self.groups[g][0] == k else 'older'
+
+    def newest(self, k):
+        g = self.of.get(k)
+        return None if g is None else self.groups[g][0]
+
+    def size(self, k):
+        g = self.of.get(k)
+        return 0 if g is None else self.groups[g][1]
 
 
 # ---------------------------------------------------------------- helpers for the interfaces
