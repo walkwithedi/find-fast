@@ -66,13 +66,14 @@ Folders appear in the results as well.
 - ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter opens the containing folder, with the item selected where the file manager supports it; Ctrl+C copies the path.
 - Right click or the Menu key (Shift+F10): open, open containing folder, copy path, rescan.
 - Click a column header to sort by name, path, size or modification time; click again to reverse. Newest first by default.
+- Hovering a result row shows its full path.
 - Results can be dragged into other programs.
 - F5 or Ctrl+R rescans; Esc clears the box, and a second Esc closes the window.
 - The status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
 
 ### Browser page
 
-Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next), open, open containing folder, copy path, rescan and quit.
+Without python3-gi (or with `--web`) a local web server starts and the browser opens its page: search, sort, a result table (200 rows at a time, "show more" for the next; hovering a row shows its full path), open, open containing folder, copy path, rescan and quit.
 
 The server listens on a random port of 127.0.0.1 only, and its address carries a token made at start. It exits a few seconds after the last page closes (a reload does not count), at once on Quit, and after 120 seconds when no page ever opened; a page left in a background tab does not count as closed. `--no-browser` only prints the address.
 
@@ -124,6 +125,9 @@ The tool reads folder listings only, never file contents, changes no file and do
 ## Changes
 
 See [CHANGELOG.md](CHANGELOG.md).
+
+- 0.2.0: hovering a result shows its full path.
+- 0.1.0: first version.
 
 ## Licence
 

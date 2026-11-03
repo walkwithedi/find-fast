@@ -81,6 +81,10 @@ async function rowNames(page) {
     await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
     assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf', 'report-draft.docx', 'report-2019.pdf']);
     assert.strictEqual(await page.getAttribute('#status', 'aria-live'), 'polite');
+    // hovering a row shows its full path
+    assert.deepStrictEqual(await page.$$eval('#rows tr', trs => trs.map(tr => tr.title)),
+      [path.join(srv.root, 'docs', 'Report 2024.pdf'), path.join(srv.root, 'docs', 'report-draft.docx'),
+       path.join(srv.root, 'docs', 'old', 'report-2019.pdf')]);
 
     // keyboard: down, enter opens, ctrl+enter opens the folder, ctrl+c copies
     await page.press('#q', 'ArrowDown');
@@ -97,9 +101,10 @@ async function rowNames(page) {
 
     // sort by name through the header, then the select
     await page.click('#hName');
-    await page.waitForFunction(() => document.querySelector('#rows td.name').textContent === 'Report 2024.pdf'
+    // wait for the re-sorted rows themselves: the first row is the same in both orders
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#rows td.name'), td => td.textContent).join('|')
+      === 'Report 2024.pdf|report-2019.pdf|report-draft.docx'
       && document.querySelector('th[data-sort="name"]').getAttribute('aria-sort') === 'ascending');
-    assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf', 'report-2019.pdf', 'report-draft.docx']);
     await page.selectOption('#sort', 'size:1');
     await page.waitForFunction(() => document.querySelector('th[data-sort="size"]').getAttribute('aria-sort') === 'descending');
 

@@ -58,6 +58,7 @@ UI = {
     },
 }
 COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime')]
+COL_TIP = 5                     # store column holding the row's tooltip
 DEFAULT_DESC = {'name': False, 'path': False, 'size': True, 'mtime': True}
 
 Gtk = Gdk = GLib = Gio = Pango = None
@@ -148,9 +149,10 @@ class Window:
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(row, True, True, 0)
 
-        # icon name, name, folder, size, time, is-folder
-        self.store = Gtk.ListStore(str, str, str, str, str)
+        # icon name, name, folder, size, time, tooltip (Pango markup: the full path)
+        self.store = Gtk.ListStore(str, str, str, str, str, str)
         tv = self.tree = Gtk.TreeView(model=self.store)
+        tv.set_tooltip_column(COL_TIP)
         tv.set_enable_search(False)
         tv.set_headers_clickable(True)
         tv.set_fixed_height_mode(True)
@@ -460,7 +462,7 @@ class Window:
             for j, k in enumerate(range(self.top, end)):
                 name, folder, size, mtime = res.row(k)
                 values = ['folder' if size < 0 else 'text-x-generic', core.display(name), core.display(folder),
-                          core.human_size(size), core.human_time(mtime)]
+                          core.human_size(size), core.human_time(mtime), self.tooltip(k, name, folder)]
                 if j < len(store):
                     store.set_row(store.get_iter(j), values)
                 else:
@@ -476,6 +478,10 @@ class Window:
                 sel.unselect_all()
         finally:
             self.filling = False
+
+    def tooltip(self, k, name, folder):
+        """Tooltip of result row k: the full path, escaped for Pango markup."""
+        return GLib.markup_escape_text(core.display(os.path.join(folder, name)), -1)
 
     def scroll_to(self, k):
         """Make result row k visible and selected."""

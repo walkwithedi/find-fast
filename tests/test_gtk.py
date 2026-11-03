@@ -146,6 +146,28 @@ class GtkTest(unittest.TestCase):
         w.on_entry_key(w.entry, key(Gdk.KEY_Escape))
         self.assertTrue(pump(until=lambda: self.quit_called))
 
+    def test_tooltip_is_full_path(self):
+        w = self.window()
+        long_dir = os.path.join(self.root, 'deep', 'a folder & <more> ' + 'x' * 120)
+        touch(os.path.join(long_dir, 'long name & <tag> ' + 'y' * 150 + '.txt'))
+        self.index.refresh()
+        w.win.resize(500, 300)
+        self.type('')
+        pump(0.2)
+        self.assertEqual(w.tree.get_tooltip_column(), ui.COL_TIP)
+        for j, row in enumerate(w.store):
+            full = w.result.path(w.top + j)
+            self.assertEqual(row[ui.COL_TIP], ui.GLib.markup_escape_text(full, -1))
+            ok, _attrs, text, _accel = ui.Pango.parse_markup(row[ui.COL_TIP], -1, '\0')
+            self.assertTrue(ok)
+            self.assertEqual(text, full)
+        self.assertIn(os.path.join(long_dir, 'long name & <tag> ' + 'y' * 150 + '.txt'),
+                      [ui.Pango.parse_markup(r[ui.COL_TIP], -1, '\0')[2] for r in w.store])
+        if len(w.result) > w.rows:
+            w.adj.set_value(1)
+            pump(0.05)
+            self.assertEqual(ui.Pango.parse_markup(w.store[0][ui.COL_TIP], -1, '\0')[2], w.result.path(1))
+
     def test_open_missing_file(self):
         w = self.window()
         self.type('notes')

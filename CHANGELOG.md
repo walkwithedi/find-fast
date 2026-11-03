@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.0
+
+- Hovering a result row shows its full path, in the GTK window and on the browser page.
+
 ## 0.1.0
 
 First version.

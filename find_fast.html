@@ -237,6 +237,7 @@ function renderRow(r) {
   tr.setAttribute('role', 'option');
   tr.setAttribute('aria-selected', 'false');
   tr.dataset.k = r.k;
+  tr.title = r.path;
   const name = document.createElement('td');
   name.className = 'name';
   const kind = document.createElement('span');
