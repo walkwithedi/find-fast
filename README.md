@@ -14,7 +14,7 @@ Type part of a name and every matching file under your home folder and local dis
 
 | File | Role |
 | --- | --- |
-| `双击运行.desktop` | Double-click launcher, shown as 秒搜文件 ("find-fast"). |
+| `秒搜文件.desktop` | Double-click launcher, shown as 秒搜文件 ("find-fast"). |
 | `install.sh` | Optional install into `~/.local`: a `find-fast` command and a menu entry. |
 | `find_fast.py` | Entry point: without arguments it opens the window; with a query it prints matches. |
 | `find_fast_core.py` | Index and search: scanning, cache, query language, inotify. |
@@ -31,7 +31,7 @@ Type part of a name and every matching file under your home folder and local dis
 
 ## Use
 
-Download `find-fast-v<version>.zip` from Releases, unpack it and double-click `双击运行.desktop`, or run `python3 find_fast.py`. A link to the launcher can go on the desktop; a copy cannot, since it must find the program next to it.
+Download `find-fast-v<version>.zip` from Releases, unpack it and double-click `秒搜文件.desktop`, or run `python3 find_fast.py`. A link to the launcher can go on the desktop (right-click it in the file manager and send it to the desktop); a copy cannot, since it must find the program next to it. Since 0.4.0 the launcher is called `秒搜文件.desktop` instead of `双击运行.desktop`, so it no longer clashes with other tools' launchers on the desktop; a link placed on the desktop earlier stops working and has to be sent to the desktop again from the tool folder.
 
 For a menu entry, run `bash install.sh` once. It copies the tool to `~/.local/share/find-fast`, creates the command `~/.local/bin/find-fast` and a menu entry, and writes the default show-or-hide shortcut Ctrl+Alt+Space (see Global hotkey); no root needed. `bash install.sh --uninstall` removes them and keeps the settings and the index.
 

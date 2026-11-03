@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.0
+
+- The launcher is renamed from `双击运行.desktop` to `秒搜文件.desktop`, matching its Name, so it can be sent to the desktop next to other tools' launchers without a name clash. Its content and the `%k` + `readlink -f` lookup are unchanged; the not-found message and the page's closing notice name the new file. A link placed on the desktop earlier stops working and has to be sent to the desktop again from the tool folder. The release zip carries the new file. walkwithedi/find-fast#18.
+
 ## 0.3.1
 
 - The READMEs end with a Feedback section giving the maintainer's feedback address. The sensitive-data scanner allows that one full address (PUBLIC_ADDRESSES) and still reports every other e-mail address. walkwithedi/edi-lab#206.
