@@ -520,6 +520,111 @@ class GtkTest(unittest.TestCase):
         w.apply_layout()
         self.assertFalse(w.expanded)
 
+    def press(self, widget_handler, keyval, mods=0):
+        return widget_handler(None, key(keyval, ui.Gdk.ModifierType(mods)))
+
+    def test_shortcuts_recorded_saved_and_used(self):
+        import test_keys
+        w = self.window()
+        Gdk = ui.Gdk
+        fake = test_keys.gnome()
+        w.hotkey = ui.DesktopHotkey(run=fake.run, env={'XDG_CURRENT_DESKTOP': 'GNOME'}, which=fake.which)
+        s = w.open_settings()
+        self.assertEqual(s.key_buttons['copy_path'].get_label(), ui.Gtk.accelerator_get_label(
+            *ui.Gtk.accelerator_parse('<Primary><Shift>c')))
+        self.assertFalse(s.copy_command.get_visible())
+        # record Alt+L for locate; a fixed key and a plain letter are refused
+        s.record('locate')
+        self.assertTrue(self.press(s.on_key, Gdk.KEY_Return))
+        self.assertIn('cannot be a shortcut', s.problems.get_text())
+        self.assertEqual(s.keys['locate'], '<Primary>Return')
+        s.record('locate')
+        self.press(s.on_key, Gdk.KEY_q)
+        self.assertIn('would take over typing', s.problems.get_text())
+        s.record('locate')
+        self.press(s.on_key, Gdk.KEY_Alt_L, Gdk.ModifierType.MOD1_MASK)     # a modifier alone waits
+        self.assertEqual(s.recording, 'locate')
+        self.press(s.on_key, Gdk.KEY_l, Gdk.ModifierType.MOD1_MASK)
+        self.assertEqual(s.keys['locate'], '<Alt>l')
+        s.record('open')
+        self.press(s.on_key, Gdk.KEY_Escape)                                # Esc cancels recording
+        self.assertIsNone(s.recording)
+        self.assertEqual(s.keys['open'], '')
+        # the same keys twice cannot be saved
+        s.record('rescan')
+        self.press(s.on_key, Gdk.KEY_l, Gdk.ModifierType.MOD1_MASK)
+        self.assertEqual(s.save(), 'blocked')
+        self.assertIn('same shortcut', s.problems.get_text())
+        s.set_key('rescan', 'F6')
+        # a global shortcut already used by the desktop is listed first
+        s.set_key('toggle', '<Super>t')
+        self.assertEqual(s.save(), 'warn')
+        self.assertIn('Terminal', s.problems.get_text())
+        s.set_key('toggle', '<Primary><Alt>f')
+        self.assertEqual(s.save(), 'saved')
+        saved = core.Config(os.path.join(self.tmp, 'config.json')).other['keys']
+        self.assertEqual(saved['locate'], '<Alt>l')
+        self.assertEqual(saved['rescan'], 'F6')
+        self.assertEqual(saved['toggle'], '<Primary><Alt>f')
+        self.assertNotIn('copy_file', saved)                                # defaults are not written
+        where = ui.DesktopHotkey.GNOME_ENTRY + ':' + ui.DesktopHotkey.GNOME_PATH
+        self.assertEqual(fake.values[(where, 'binding')], "'<Primary><Alt>f'")
+        self.assertIn('--toggle', fake.values[(where, 'command')])
+        # the new keys work at once; the old ones no longer do
+        self.type('report')
+        located = []
+        w.show_in_file_manager = lambda p: located.append(p) or True
+        w.cur = 0
+        self.assertTrue(w.on_tree_key(w.tree, key(Gdk.KEY_l, Gdk.ModifierType.MOD1_MASK)))
+        self.assertEqual(len(located), 1)
+        w.on_tree_key(w.tree, key(Gdk.KEY_Return, Gdk.ModifierType.CONTROL_MASK))
+        self.assertEqual(len(located), 1)
+        refreshed = []
+        w.start_refresh = lambda: refreshed.append(1)
+        w.apply_keys(w.keys)
+        self.assertTrue(self.accel(Gdk.KEY_F6))
+        self.assertFalse(self.accel(Gdk.KEY_F5))
+        self.assertEqual(refreshed, [1])
+        # clearing the global shortcut removes it from the desktop again
+        s = w.open_settings()
+        s.set_key('toggle', '')
+        self.assertEqual(s.save(), 'saved')
+        self.assertNotIn((where, 'binding'), fake.values)
+
+    def test_shortcuts_on_an_unknown_desktop(self):
+        import test_keys
+        w = self.window()
+        fake = test_keys.gnome()
+        w.hotkey = ui.DesktopHotkey(run=fake.run, env={'XDG_CURRENT_DESKTOP': 'XFCE'}, which=fake.which)
+        s = w.open_settings()
+        self.assertTrue(s.copy_command.get_visible())
+        self.assertIn('--toggle', s.key_note.get_text())
+        s.copy_toggle_command()
+        self.assertIn('--toggle', ui.Gtk.Clipboard.get(ui.Gdk.SELECTION_CLIPBOARD).wait_for_text())
+        s.set_key('toggle', '<Primary><Alt>f')
+        self.assertEqual(s.save(), 'saved')
+        self.assertFalse(any(c[1] == 'set' for c in fake.calls))
+        self.assertEqual(core.Config(os.path.join(self.tmp, 'config.json')).other['keys']['toggle'], '<Primary><Alt>f')
+
+    def test_toggle(self):
+        w = self.window()
+        active = [True]
+        w.window_active = lambda: active[0]
+        w.toggle()
+        self.assertFalse(w.win.get_visible())               # in front: hidden
+        w.entry.set_text('report')
+        w.toggle()
+        self.assertTrue(w.win.get_visible())                # hidden: shown with the text selected
+        self.assertEqual(w.entry.get_selection_bounds(), (0, 6))
+        active[0] = False
+        w.toggle()
+        self.assertTrue(w.win.get_visible())                # behind another window: brought forward
+        self.assertFalse(self.quit_called)
+
+    def test_toggle_action_of_the_application(self):
+        app = ui.build_app(self.index, 'en')
+        self.assertIsNotNone(app.lookup_action('toggle'))
+
     def test_open_missing_file(self):
         w = self.window()
         self.type('notes')

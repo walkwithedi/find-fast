@@ -39,11 +39,14 @@ The first start builds the index, with progress in the status bar; what has been
 
 ### Global hotkey
 
-The tool does not grab keys itself; bind it in the system settings. Starting it while it is open brings the open window forward.
+Set it in the window under Settings → Shortcuts → Show or hide the window: click the button and press the keys. On saving it is written into the desktop's own custom shortcuts (Kylin UKUI or GNOME, through gsettings) and shows in the system settings; it runs `find-fast --toggle`, which hides the window when it is in front and otherwise brings it forward with the search text selected (starting it when it is not running). A hidden window keeps the index up to date; closing the window or a second Esc on an empty box quits. A combination the desktop already uses is named first, with Save anyway. Clearing it, or `bash install.sh --uninstall`, removes only the entry this tool wrote.
 
-- GNOME (Ubuntu): Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts → add, with the full path of `~/.local/bin/find-fast` as the command (for example `/home/<user>/.local/bin/find-fast`).
-- Kylin (UKUI): Settings → Devices → Shortcuts → Custom Shortcuts → add, with the same full path.
-- Without `install.sh`, use `python3 <tool folder>/find_fast.py`.
+Without `install.sh` the shortcut points at the unpacked folder (`python3 <tool folder>/find_fast.py --toggle`) and must be set again after the folder moves. On other desktops, or without gsettings, nothing is written: the settings show the command, with Copy command, to add by hand:
+
+- GNOME (Ubuntu): Settings → Keyboard → View and Customise Shortcuts → Custom Shortcuts → add, with `/home/<user>/.local/bin/find-fast --toggle` as the command.
+- Kylin (UKUI): Settings → Devices → Shortcuts → Custom Shortcuts → add, with the same command.
+
+The window's own shortcuts are under the same Settings section: Locate, Open the selected item (Enter always opens), Copy file, Copy path, Open settings, Rescan and Go to the search box. Arrows, Enter and Esc stay fixed and cannot be recorded; a shortcut needs Ctrl, Alt or Super, or is F1 to F12; two actions on the same keys cannot be saved. Changes apply at once and do not rebuild the index; Restore defaults puts back the defaults below.
 
 ### Query syntax
 
@@ -63,7 +66,7 @@ Folders appear in the results as well.
 ### Window
 
 - Type to search; ↓ moves into the list and ↑ on the first row back to the box; typing in the list continues in the box.
-- ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter locates; Ctrl+C copies the file; Ctrl+Shift+C copies the path.
+- ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter locates; Ctrl+C copies the file; Ctrl+Shift+C copies the path. These are the default keys; see "Global hotkey" above for changing them.
 - Locate opens the containing folder in the file manager with the item selected (files and folders alike); where the file manager cannot select it, only the folder is opened and the status bar says so. The locate button at the end of every row locates that row.
 - Copy file puts the file or folder itself on the clipboard: pasting in a file manager gives the item, pasting in other programs its path. Only the window has it; the browser page's clipboard holds text only, so there Ctrl+C still copies the path.
 - Right click or the Menu key (Shift+F10): locate, open, copy file, copy path; after a separator Go to the newest version (on Newer exists rows), Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first and names the folder; the item is not shown when that folder is an indexed folder itself.
@@ -72,7 +75,7 @@ Folders appear in the results as well.
 - Similar versions: several versions of one file (copies, copies saved with a date or version number, drafts and finals) form a group; the newest by modification time is tagged Newest before its name and the others Newer exists. Results are shown as usual, not folded. Hovering adds a line with the group size and the newest one; right-click a Newer exists row for Go to the newest version. The rules are under "Similar versions" below.
 - The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
-- F5 or Ctrl+R rescans; Esc clears the box (which folds the list), and a second Esc closes the window.
+- F5 rescans; Ctrl+, opens Settings; Ctrl+L goes to the search box; Esc clears the box (which folds the list), and a second Esc closes the window.
 - While another program has the focus the window is 70 % opaque, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
 - Column widths, window size, maximised state, position and sort are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults; a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
 - With an empty search box only the search row shows and the window gets shorter where it is; the first character typed unfolds the result list to the height it last had unfolded, also when nothing matches (it then says No matches). Clearing the box, or Esc, folds it again. A maximised window does not fold. While folded, the right end of the search box shows "N items" or "Indexing 42%", and messages such as copy results or errors for a few seconds; hovering the box shows the full index state and the version.
@@ -106,6 +109,8 @@ python3 find_fast.py QUERY...            print matching paths, newest first
   --update         rescan changed folders first; --rebuild rescan everything
   --status         index status as JSON
   --gtk / --web    choose the window or the page; --no-browser prints the page address only
+  --toggle         show the window, or hide it when it is in front (for a global shortcut)
+  --remove-hotkey  remove the show-or-hide shortcut this tool wrote into the desktop settings
   --log-level DEBUG|INFO|WARNING|ERROR    (default WARNING, or LOG_LEVEL)
 ```
 
@@ -156,7 +161,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
-- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused; the list folds away under an empty search box.
+- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused; the list folds away under an empty search box; shortcuts can be changed and a global show-or-hide shortcut set.
 - 0.1.0: first version.
 
 ## Licence

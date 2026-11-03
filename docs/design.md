@@ -23,7 +23,7 @@ Linux 上的全盘文件名秒搜工具，中文名「秒搜文件」。第一�
 1. 用时启动，关窗即退出，不常驻。Gtk.Application 保证单实例：已在运行时再次启动，激活已有窗口。
 2. 启动后马上载入紧凑二进制缓存即可搜索；后台按目录修改时间增量补扫，状态栏显示进度。
 3. 窗口开着时用 inotify 实时更新（ctypes），后台建立监听；监听数超过 max_user_watches 时，超出部分退回定时扫描。
-4. 全局快捷键：提供唤出命令，由使用者在系统快捷键里绑定，README 写明步骤。
+4. 全局快捷键：在设置里录入后，用 gsettings 写入桌面的自定义快捷键（UKUI：org.ukui.control-center.keybinding，路径 /org/ukui/desktop/keybindings/find-fast/；GNOME：media-keys 的 custom-keybindings，路径 …/custom-keybindings/find-fast/），只增改本工具那一条；命令为 `find-fast --toggle`（已用 install.sh 安装时）或 `python3 <目录>/find_fast.py --toggle`。--toggle 由已运行的实例处理：在前台则隐藏（索引照常更新），否则调到前台并全选搜索框。识别不了桌面时只给出命令供手动绑定。窗口内快捷键存于 config.json 的 keys。`--remove-hotkey`（install.sh --uninstall 调用）删除写入的那一条。
 
 ## 五、索引范围
 

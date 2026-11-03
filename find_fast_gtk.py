@@ -4,14 +4,19 @@
 The result list is virtual: a Gtk.TreeView whose ListStore holds only the rows that fit on
 screen, refilled from the search result as the separate scroll bar moves, so the number of
 results is not limited. Keyboard: type to search; Down moves into the list; Up/Down, Page
-Up/Down, Home/End move; Enter opens; Ctrl+Enter locates the item in the file manager; Ctrl+C
-copies the file itself, Ctrl+Shift+C its path; Menu or Shift+F10 opens the context menu; F5 or
-Ctrl+R rescans; Ctrl+, opens the settings; Esc clears the search box, and when it is empty
-closes the window.
+Up/Down, Home/End move; Enter opens; Menu or Shift+F10 opens the context menu; Esc clears the
+search box, and when it is empty closes the window. Default shortcuts, changeable in Settings:
+Ctrl+Enter locates the item in the file manager; Ctrl+C copies the file itself, Ctrl+Shift+C its
+path; F5 rescans; Ctrl+, opens the settings; Ctrl+L goes to the search box. A global shortcut set
+in Settings runs `--toggle` through the desktop's custom shortcuts.
 """
 import json
 import logging
 import os
+import re
+import shlex
+import shutil
+import subprocess
 import sys
 import threading
 import time
@@ -62,6 +67,20 @@ UI = {
         'exclude_detail': '这个文件夹及其中的全部条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
         'applying': '正在按新设置更新索引……', 'applied': '已按新设置更新索引',
         'save_failed': '保存失败：{error}。请检查设置文件夹是否可写。',
+        'keys': '快捷键', 'key_none': '未设置', 'key_press': '请按组合键……（Esc 取消）', 'key_clear': '清除',
+        'key_clear_item': '清除「{action}」的快捷键',
+        'key_toggle': '唤起或隐藏窗口（全局，写入系统快捷键）', 'key_locate': '定位', 'key_open': '打开所选（回车始终可用）',
+        'key_copy_file': '复制文件', 'key_copy_path': '复制路径', 'key_settings': '打开设置', 'key_rescan': '重新扫描',
+        'key_focus': '聚焦搜索框',
+        'key_fixed': '{key} 是列表操作用的固定键（方向键、回车、Esc 等），不能设置为快捷键',
+        'key_plain': '{key} 没有 Ctrl、Alt 或 Super，会和输入冲突；请加上修饰键，或用 F1 至 F12',
+        'key_dup': '保存失败：「{a}」与「{b}」的快捷键相同。请改掉其中一个。',
+        'key_taken': '{key} 已被桌面快捷键「{name}」占用',
+        'key_manual': '没有找到可写入的桌面快捷键设置（需要麒麟 UKUI 或 GNOME，以及 gsettings）。唤起快捷键请在系统设置的自定义快捷键里添加，命令填：{command}',
+        'key_moved': '工具没有用 install.sh 安装，唤起快捷键指向当前目录；移动工具目录后需重新设置。',
+        'copy_command': '复制命令',
+        'hotkey_written': '已写入系统快捷键：{key}', 'hotkey_removed': '已删除系统里的唤起快捷键',
+        'hotkey_failed': '保存失败：写入系统快捷键时出错（{error}）。请在系统设置的自定义快捷键里手动添加，命令填：{command}',
     },
     'en': {
         'search': 'Search file names... (* ? wildcards, ext:pdf, path:, !not, a|b)',
@@ -101,6 +120,25 @@ UI = {
                           'Remove the rule under Excluded in Settings to undo this.',
         'applying': 'Updating the index for the new settings...', 'applied': 'Index updated for the new settings',
         'save_failed': 'Save failed: {error}. Check that the settings folder is writable.',
+        'keys': 'Shortcuts', 'key_none': 'None', 'key_press': 'Press the keys... (Esc cancels)', 'key_clear': 'Clear',
+        'key_clear_item': 'Clear the shortcut of {action}',
+        'key_toggle': 'Show or hide the window (global, a system shortcut)', 'key_locate': 'Locate',
+        'key_open': 'Open the selected item (Enter always works)', 'key_copy_file': 'Copy file',
+        'key_copy_path': 'Copy path', 'key_settings': 'Open settings', 'key_rescan': 'Rescan',
+        'key_focus': 'Go to the search box',
+        'key_fixed': '{key} is used by the list (arrows, Enter, Esc and the like) and cannot be a shortcut',
+        'key_plain': '{key} has no Ctrl, Alt or Super and would take over typing; add a modifier or use F1 to F12',
+        'key_dup': 'Save failed: {a} and {b} have the same shortcut. Change one of them.',
+        'key_taken': '{key} is already a desktop shortcut ({name})',
+        'key_manual': 'No desktop shortcut settings this tool can write to were found (UKUI or GNOME with gsettings '
+                      'is needed). Add the show-or-hide shortcut as a custom shortcut in the system settings, with '
+                      'the command: {command}',
+        'key_moved': 'The tool was not installed with install.sh, so the shortcut points at this folder; set it '
+                     'again after moving the folder.',
+        'copy_command': 'Copy command',
+        'hotkey_written': 'System shortcut saved: {key}', 'hotkey_removed': 'Show-or-hide shortcut removed from the system',
+        'hotkey_failed': 'Save failed: the system shortcut could not be written ({error}). Add it by hand as a '
+                         'custom shortcut in the system settings, with the command: {command}',
     },
 }
 COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime'),
@@ -114,6 +152,253 @@ COLUMN_WIDTHS = {'name': 300, 'path': 380, 'size': 90, 'mtime': 140, 'locate': 3
 MIN_COLUMN_WIDTH = 24
 DEFAULT_SIZE = (960, 600)
 EXPANDED_MIN = 150              # a smaller window height is not remembered as the unfolded height
+
+
+# ---------------------------------------------------------------- shortcuts
+#
+# Window shortcuts are kept in config.json under "keys" as GTK accelerator names (such as
+# <Primary><Shift>c); an empty string means none. "toggle" is the global shortcut, written into
+# the desktop's own custom shortcuts, which runs `find-fast --toggle`.
+
+KEY_DEFAULTS = {
+    'locate': '<Primary>Return', 'open': '', 'copy_file': '<Primary>c', 'copy_path': '<Primary><Shift>c',
+    'settings': '<Primary>comma', 'rescan': 'F5', 'focus': '<Primary>l', 'toggle': '',
+}
+KEY_ORDER = ('toggle', 'locate', 'open', 'copy_file', 'copy_path', 'settings', 'rescan', 'focus')
+LIST_KEYS = ('locate', 'open', 'copy_file', 'copy_path')        # act on the selected row: list focus only
+FIXED_KEYS = {'up', 'down', 'left', 'right', 'return', 'kp_enter', 'escape', 'page_up', 'page_down',
+              'home', 'end', 'tab', 'iso_left_tab'}
+_MOD_NAMES = {'primary': 'Primary', 'control': 'Primary', 'ctrl': 'Primary', 'ctl': 'Primary', 'shift': 'Shift',
+              'alt': 'Alt', 'mod1': 'Alt', 'super': 'Super', 'mod4': 'Super', 'meta': 'Meta', 'hyper': 'Hyper'}
+_MOD_ORDER = ('Primary', 'Shift', 'Alt', 'Super', 'Meta', 'Hyper')
+
+
+def canonical_accel(accel):
+    """A comparable form of an accelerator name: modifiers in a fixed order, key in lower case;
+    '' for none, None when it cannot be read."""
+    if not isinstance(accel, str):
+        return None
+    accel = accel.strip()
+    if not accel:
+        return ''
+    mods = set()
+    pos = 0
+    for m in re.finditer(r'<([^<>]+)>', accel):
+        if m.start() != pos:
+            return None
+        name = _MOD_NAMES.get(m.group(1).lower())
+        if name is None:
+            return None
+        mods.add(name)
+        pos = m.end()
+    key = accel[pos:].strip()
+    if not key or '<' in key or '>' in key:
+        return None
+    return ''.join('<%s>' % m for m in _MOD_ORDER if m in mods) + key.lower()
+
+
+def is_fixed_key(accel):
+    """Arrows, Enter, Esc and other keys the list uses, without Ctrl, Alt or Super."""
+    c = canonical_accel(accel)
+    if not c:
+        return False
+    key = re.sub(r'<[^>]+>', '', c)
+    return key in FIXED_KEYS and not any(m in c for m in ('<Primary>', '<Alt>', '<Super>'))
+
+
+def load_keys(config):
+    """{action: accelerator} from the settings, defaults for missing or unreadable ones."""
+    keys = dict(KEY_DEFAULTS)
+    stored = config.other.get('keys')
+    if stored is None:
+        return keys
+    if not isinstance(stored, dict):
+        log.warning('settings: "keys" is not an object; default shortcuts used')
+        return keys
+    for action, accel in stored.items():
+        if action not in KEY_DEFAULTS:
+            continue
+        c = canonical_accel(accel)
+        if c is None or (action != 'toggle' and is_fixed_key(accel)):
+            log.warning('settings: bad shortcut %r for %s; the default is used', accel, action)
+            continue
+        keys[action] = accel.strip()
+    return keys
+
+
+def plain_key_ok(accel):
+    """A shortcut needs Ctrl, Alt or Super, or a function key: a plain key would take over typing."""
+    c = canonical_accel(accel)
+    if not c:
+        return True
+    if any(m in c for m in ('<Primary>', '<Alt>', '<Super>')):
+        return True
+    return re.fullmatch(r'(?:<[^>]+>)*f([1-9]|1[0-9]|2[0-4])', c) is not None
+
+
+def key_clashes(keys):
+    """[(action, other action)] for window shortcuts set to the same keys."""
+    seen, out = {}, []
+    for action in KEY_ORDER:
+        c = canonical_accel(keys.get(action, ''))
+        if not c:
+            continue
+        if c in seen:
+            out.append((action, seen[c]))
+        else:
+            seen[c] = action
+    return out
+
+
+def run_command(args):
+    """(exit code, standard output) of a command; (127, '') when it cannot run."""
+    try:
+        p = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=10)
+        return p.returncode, p.stdout
+    except (OSError, subprocess.SubprocessError) as e:
+        log.info('%s failed: %s', args[0], e)
+        return 127, ''
+
+
+def _gs_list(text):
+    """Accelerators or paths in a gsettings value: a string or a list of strings."""
+    return re.findall(r"'((?:[^'\\]|\\.)*)'", text or '')
+
+
+class DesktopHotkey:
+    """The global shortcut as a custom shortcut of the desktop (UKUI or GNOME), through
+    gsettings and dconf. Only the entry this tool writes is ever changed. `run` executes a
+    command and returns (exit code, output); tests pass a stand-in."""
+
+    GNOME_LIST = ('org.gnome.settings-daemon.plugins.media-keys', 'custom-keybindings')
+    GNOME_ENTRY = 'org.gnome.settings-daemon.plugins.media-keys.custom-keybinding'
+    GNOME_PATH = '/org/gnome/settings-daemon/plugins/media-keys/custom-keybindings/find-fast/'
+    GNOME_SYSTEM = ('org.gnome.desktop.wm.keybindings', 'org.gnome.settings-daemon.plugins.media-keys',
+                    'org.gnome.shell.keybindings', 'org.gnome.mutter.keybindings')
+    UKUI_ENTRY = 'org.ukui.control-center.keybinding'
+    UKUI_DIR = '/org/ukui/desktop/keybindings/'
+    UKUI_PATH = UKUI_DIR + 'find-fast/'
+    UKUI_SYSTEM = ('org.ukui.SettingsDaemon.plugins.media-keys', 'org.ukui.SettingsDaemon.plugins.keybindings')
+
+    def __init__(self, run=run_command, env=None, which=shutil.which):
+        self.run = run
+        self.env = os.environ if env is None else env
+        self.which = which
+        self._schemas = None
+
+    def schemas(self):
+        if self._schemas is None:
+            code, out = self.run(['gsettings', 'list-schemas'])
+            self._schemas = set(out.split()) if code == 0 else set()
+        return self._schemas
+
+    def desktop(self):
+        """'ukui', 'gnome' or None (no gsettings, or a desktop this tool cannot write to)."""
+        if not self.which('gsettings'):
+            return None
+        names = (self.env.get('XDG_CURRENT_DESKTOP', '') + ':' + self.env.get('DESKTOP_SESSION', '')).lower()
+        have = self.schemas()
+        if 'ukui' in names and self.UKUI_ENTRY in have and self.which('dconf'):
+            return 'ukui'
+        if 'gnome' in names and self.GNOME_LIST[0] in have:
+            return 'gnome'
+        return None
+
+    def _gs(self, *args):
+        code, out = self.run(['gsettings'] + list(args))
+        return out.strip() if code == 0 else None
+
+    def _set(self, schema_path, key, value):
+        code, _ = self.run(['gsettings', 'set', schema_path, key, value])
+        if code != 0:
+            raise OSError('gsettings set %s %s failed' % (schema_path, key))
+
+    @staticmethod
+    def _quote(s):
+        return "'" + s.replace('\\', '\\\\').replace("'", "\\'") + "'"
+
+    def write(self, accel, command, name):
+        """Add or update this tool's custom shortcut; raises OSError when gsettings fails."""
+        kind = self.desktop()
+        if kind == 'gnome':
+            paths = _gs_list(self._gs('get', *self.GNOME_LIST))
+            if self.GNOME_PATH not in paths:
+                self._set(self.GNOME_LIST[0], self.GNOME_LIST[1],
+                          '[' + ', '.join(self._quote(p) for p in paths + [self.GNOME_PATH]) + ']')
+            where = self.GNOME_ENTRY + ':' + self.GNOME_PATH
+            for key, value in (('name', name), ('command', command), ('binding', accel)):
+                self._set(where, key, self._quote(value))
+        elif kind == 'ukui':
+            where = self.UKUI_ENTRY + ':' + self.UKUI_PATH
+            for key, value in (('name', name), ('action', command), ('binding', accel)):
+                self._set(where, key, self._quote(value))
+        else:
+            raise OSError('no supported desktop')
+
+    def remove(self):
+        """Remove this tool's custom shortcut (nothing else); True when there was one."""
+        kind = self.desktop()
+        if kind == 'gnome':
+            paths = _gs_list(self._gs('get', *self.GNOME_LIST))
+            if self.GNOME_PATH not in paths:
+                return False
+            rest = [p for p in paths if p != self.GNOME_PATH]
+            self._set(self.GNOME_LIST[0], self.GNOME_LIST[1],
+                      '[' + ', '.join(self._quote(p) for p in rest) + ']' if rest else '@as []')
+            for key in ('name', 'command', 'binding'):
+                self.run(['gsettings', 'reset', self.GNOME_ENTRY + ':' + self.GNOME_PATH, key])
+            return True
+        if kind == 'ukui':
+            code, out = self.run(['dconf', 'list', self.UKUI_DIR])
+            if code != 0 or 'find-fast/' not in out.split():
+                return False
+            self.run(['dconf', 'reset', '-f', self.UKUI_PATH])
+            return True
+        return False
+
+    def taken(self, accel):
+        """Name of a desktop shortcut already on these keys (not this tool's own), or None."""
+        want = canonical_accel(accel)
+        if not want:
+            return None
+        kind = self.desktop()
+        if kind is None:
+            return None
+        system = self.GNOME_SYSTEM if kind == 'gnome' else self.UKUI_SYSTEM
+        for schema in system:
+            if schema not in self.schemas():
+                continue
+            code, out = self.run(['gsettings', 'list-recursively', schema])
+            if code != 0:
+                continue
+            for line in out.splitlines():
+                parts = line.split(None, 2)
+                if len(parts) == 3 and any(canonical_accel(a) == want for a in _gs_list(parts[2])):
+                    return parts[1]
+        if kind == 'gnome':
+            paths = [p for p in _gs_list(self._gs('get', *self.GNOME_LIST)) if p != self.GNOME_PATH]
+            entries = [(self.GNOME_ENTRY + ':' + p) for p in paths]
+        else:
+            code, out = self.run(['dconf', 'list', self.UKUI_DIR])
+            dirs = [d for d in out.split() if d.endswith('/') and d != 'find-fast/'] if code == 0 else []
+            entries = [(self.UKUI_ENTRY + ':' + self.UKUI_DIR + d) for d in dirs]
+        for where in entries:
+            if any(canonical_accel(a) == want for a in _gs_list(self._gs('get', where, 'binding'))):
+                names = _gs_list(self._gs('get', where, 'name'))
+                return names[0] if names else where
+        return None
+
+
+def toggle_command(here=None, home=None):
+    """(command for the global shortcut, installed): the installed command when this copy is the
+    one install.sh made, else python3 with this file's path (which breaks if the folder moves)."""
+    here = here or os.path.dirname(os.path.abspath(__file__))
+    home = home or core.HOME
+    data = os.environ.get('XDG_DATA_HOME') or os.path.join(home, '.local', 'share')
+    command = os.path.join(home, '.local', 'bin', 'find-fast')
+    if os.path.normpath(here) == os.path.normpath(os.path.join(data, 'find-fast')) and os.path.exists(command):
+        return shlex.quote(command) + ' --toggle', True
+    return 'python3 ' + shlex.quote(os.path.join(here, 'find_fast.py')) + ' --toggle', False
 
 
 def load_ui_state(path):
@@ -207,9 +492,10 @@ def file_uri(path):
     return 'file://' + urllib.parse.quote(os.fsencode(path))
 
 
-def t(lang, key, **kw):
-    table = UI.get(lang, UI['en'])
-    return table.get(key, UI['en'][key]).format(**kw)
+def t(_lang, _name, **kw):
+    """Interface text _name in language _lang, with {placeholders} filled from kw."""
+    table = UI.get(_lang, UI['en'])
+    return table.get(_name, UI['en'][_name]).format(**kw)
 
 
 class Window:
@@ -238,6 +524,8 @@ class Window:
         self.message = None             # (text, kind) shown instead of the result count
         self.query = None               # text of the last search
         self.versions = None            # core.VersionGroups of the result, once worked out
+        self.keys = load_keys(index.config)
+        self.hotkey = DesktopHotkey()
         self.searches = 0
         self.closed = False             # set when the window is destroyed; late callbacks do nothing
         self.build()
@@ -418,15 +706,8 @@ class Window:
 
         w.connect('delete-event', self.on_delete)
         w.connect('destroy', lambda *_: setattr(self, 'closed', True))
-        accel = Gtk.AccelGroup()
-        w.add_accel_group(accel)
-        for key in ('F5', '<Control>r'):
-            k, mods = Gtk.accelerator_parse(key)
-            accel.connect(k, mods, 0, lambda *_: (self.start_refresh(), True)[1])
-        k, mods = Gtk.accelerator_parse('<Control>l')
-        accel.connect(k, mods, 0, lambda *_: (self.entry.grab_focus(), True)[1])
-        k, mods = Gtk.accelerator_parse('<Control>comma')
-        accel.connect(k, mods, 0, lambda *_: (self.open_settings(), True)[1])
+        self.accel = None
+        self.apply_keys(self.keys)
         self.update_sort_indicators()
         w.show_all()
         self.expanded = None
@@ -485,7 +766,78 @@ class Window:
         self.index.refresh_and_watch(stop=stop)
         GLib.idle_add(self.after_change)
 
+    # ------------------------------------------------------------ shortcuts
+
+    def matches(self, event, action):
+        """True when a key event is the shortcut set for action."""
+        accel = self.keys.get(action)
+        if not accel:
+            return False
+        keyval, mods = Gtk.accelerator_parse(accel)
+        if not keyval:
+            return False
+        pressed = Gdk.KEY_Return if event.keyval == Gdk.KEY_KP_Enter else event.keyval
+        state = int(event.state) & int(Gtk.accelerator_get_default_mod_mask())
+        return Gdk.keyval_to_lower(pressed) == Gdk.keyval_to_lower(keyval) and state == int(mods)
+
+    def apply_keys(self, keys):
+        """Use these shortcuts: the window-wide ones go into an accelerator group, the list ones
+        are checked in the list's key handler."""
+        self.keys = dict(keys)
+        if self.accel is not None:
+            self.win.remove_accel_group(self.accel)
+        self.accel = Gtk.AccelGroup()
+        self.win.add_accel_group(self.accel)
+        calls = {'settings': self.open_settings, 'rescan': self.start_refresh, 'focus': self.entry.grab_focus}
+        for action, call in calls.items():
+            keyval, mods = Gtk.accelerator_parse(self.keys.get(action) or '')
+            if keyval:
+                self.accel.connect(keyval, mods, 0, lambda *_, f=call: (f(), True)[1])
+
+    def toggle(self):
+        """The global shortcut: hide the window when it is in front, else bring it forward with
+        the search text selected. A hidden window keeps the index up to date."""
+        if self.win.get_visible() and self.window_active():
+            self.win.hide()
+            return
+        self.win.show()
+        self.win.present_with_time(Gtk.get_current_event_time() or GLib.get_monotonic_time() // 1000)
+        self.entry.grab_focus()
+        self.entry.select_region(0, -1)
+
     # ------------------------------------------------------------ settings
+
+    def save_config(self, config):
+        """Save settings that do not change the index scope (shortcuts)."""
+        try:
+            config.save()
+        except OSError as e:
+            log.warning('cannot save %s: %s', config.path, e)
+            self.show_message(t(self.lang, 'save_failed', error=e.strerror or e), 'bad')
+            return False
+        with self.index.lock:
+            self.index.config = config
+        return True
+
+    def write_hotkey(self, accel):
+        """Put the global shortcut into the desktop's custom shortcuts, or remove it."""
+        command, _ = toggle_command()
+        if self.hotkey.desktop() is None:
+            return False
+        try:
+            if accel:
+                self.hotkey.write(accel, command, core.text('app_name', self.lang))
+                keyval, mods = Gtk.accelerator_parse(accel)
+                label = Gtk.accelerator_get_label(keyval, mods) if keyval else accel
+                self.show_message(t(self.lang, 'hotkey_written', key=label), 'ok')
+            else:
+                self.hotkey.remove()
+                self.show_message(t(self.lang, 'hotkey_removed'), 'ok')
+            return True
+        except OSError as e:
+            log.warning('cannot write the system shortcut: %s', e)
+            self.show_message(t(self.lang, 'hotkey_failed', error=e, command=command), 'bad', seconds=15)
+            return False
 
     def open_settings(self):
         if self.settings is not None:
@@ -1044,14 +1396,14 @@ class Window:
         if key == Gdk.KEY_End:
             self.scroll_to(self.count() - 1)
             return True
-        if key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter):
-            if ctrl:
-                self.open_folder()
-            else:
-                self.open_current()
-            return True
-        if ctrl and key in (Gdk.KEY_c, Gdk.KEY_C):
-            (self.copy_path if shift else self.copy_file)()
+        actions = {'locate': self.open_folder, 'open': self.open_current, 'copy_file': self.copy_file,
+                   'copy_path': self.copy_path}
+        for action in LIST_KEYS:
+            if self.matches(event, action):
+                actions[action]()
+                return True
+        if key in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and not ctrl:
+            self.open_current()
             return True
         if key == Gdk.KEY_Menu or (shift and key == Gdk.KEY_F10):
             self.popup_menu(None)
@@ -1266,9 +1618,9 @@ class Window:
 
 
 class SettingsDialog:
-    """Index scope: folders to index, exclusions, hidden entries. Edits stay in the dialog until
-    Save; problems are listed first and Save anyway saves regardless (an empty folder list
-    cannot be saved)."""
+    """Index scope (folders to index, exclusions, hidden entries) and shortcuts. Edits stay in
+    the dialog until Save; problems are listed first and Save anyway saves regardless (an empty
+    folder list or two actions on the same keys cannot be saved)."""
 
     RESTORE, ANYWAY = 1, 2
 
@@ -1279,18 +1631,25 @@ class SettingsDialog:
         self.mounts = mounts
         self.roots = list(config.roots)
         self.exclude = list(config.exclude)
+        self.keys = load_keys(config)
+        self.saved_toggle = self.keys['toggle']
+        self.recording = None           # action whose shortcut is being recorded
         lang = self.lang
         d = self.dialog = Gtk.Dialog(title=t(lang, 'settings'), transient_for=window.win, modal=True,
                                      destroy_with_parent=True)
-        d.set_default_size(560, 520)
+        d.set_default_size(580, 680)
         d.add_button(t(lang, 'defaults'), self.RESTORE)
         d.add_button(t(lang, 'cancel'), Gtk.ResponseType.CANCEL)
         self.anyway = d.add_button(t(lang, 'save_anyway'), self.ANYWAY)
         d.add_button(t(lang, 'save'), Gtk.ResponseType.OK)
         d.set_default_response(Gtk.ResponseType.OK)
         d.connect('response', self.on_response)
-        area = d.get_content_area()
-        area.set_spacing(6)
+        d.connect('key-press-event', self.on_key)
+        outer = Gtk.ScrolledWindow()
+        outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        d.get_content_area().pack_start(outer, True, True, 0)
+        area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        outer.add(area)
         for side in ('start', 'end', 'top', 'bottom'):
             getattr(area, 'set_margin_' + side)(10)
 
@@ -1323,11 +1682,42 @@ class SettingsDialog:
         self.hidden = Gtk.CheckButton(label=t(lang, 'set_hidden'))
         self.hidden.set_active(config.hidden)
         area.pack_start(self.hidden, False, False, 0)
+
+        area.pack_start(self.heading(t(lang, 'keys')), False, False, 0)
+        grid = Gtk.Grid(column_spacing=8, row_spacing=4)
+        self.key_buttons = {}
+        for r, action in enumerate(KEY_ORDER):
+            lab = Gtk.Label(label=t(lang, 'key_' + action), xalign=0)
+            lab.set_line_wrap(True)
+            lab.set_hexpand(True)
+            grid.attach(lab, 0, r, 1, 1)
+            b = self.key_buttons[action] = Gtk.Button()
+            b.connect('clicked', lambda _b, a=action: self.record(a))
+            grid.attach(b, 1, r, 1, 1)
+            c = Gtk.Button(label=t(lang, 'key_clear'))
+            c.set_relief(Gtk.ReliefStyle.NONE)
+            c.get_accessible().set_name(t(lang, 'key_clear_item', action=t(lang, 'key_' + action)))
+            c.connect('clicked', lambda _b, a=action: self.set_key(a, ''))
+            grid.attach(c, 2, r, 1, 1)
+        area.pack_start(grid, False, False, 0)
+        self.key_note = Gtk.Label(xalign=0)
+        self.key_note.set_line_wrap(True)
+        self.key_note.set_selectable(True)
+        self.key_note.get_style_context().add_class('dim-label')
+        self.key_note.set_no_show_all(True)
+        area.pack_start(self.key_note, False, False, 0)
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.copy_command = Gtk.Button(label=t(lang, 'copy_command'))
+        self.copy_command.connect('clicked', lambda *_: self.copy_toggle_command())
+        self.copy_command.set_no_show_all(True)
+        row.pack_start(self.copy_command, False, False, 0)
+        area.pack_start(row, False, False, 0)
         self.problems = Gtk.Label(xalign=0)
         self.problems.set_line_wrap(True)
         self.problems.set_selectable(True)
         area.pack_start(self.problems, False, False, 0)
         self.refill()
+        self.refill_keys()
 
     @staticmethod
     def heading(text):
@@ -1412,43 +1802,143 @@ class SettingsDialog:
     def restore_defaults(self):
         self.roots, self.exclude = list(core.DEFAULT_ROOTS), list(core.DEFAULT_EXCLUDE)
         self.hidden.set_active(False)
+        self.keys = dict(KEY_DEFAULTS)
+        self.recording = None
         self.refill()
+        self.refill_keys()
         self.update_problems([])
+
+    # shortcuts
+
+    def key_label(self, accel):
+        if not accel:
+            return t(self.lang, 'key_none')
+        keyval, mods = Gtk.accelerator_parse(accel)
+        return Gtk.accelerator_get_label(keyval, mods) if keyval else accel
+
+    def refill_keys(self):
+        for action, b in self.key_buttons.items():
+            if action == self.recording:
+                b.set_label(t(self.lang, 'key_press'))
+            else:
+                b.set_label(self.key_label(self.keys.get(action, '')))
+            b.get_accessible().set_name(t(self.lang, 'key_' + action) + ': ' + b.get_label())
+        command, installed = toggle_command()
+        notes = []
+        manual = self.window.hotkey.desktop() is None
+        if manual:
+            notes.append(t(self.lang, 'key_manual', command=command))
+        elif not installed:
+            notes.append(t(self.lang, 'key_moved'))
+        self.key_note.set_text('\n'.join(notes))
+        self.key_note.set_visible(bool(notes))
+        self.copy_command.set_visible(manual)
+
+    def record(self, action):
+        """Wait for the next key combination for action (Esc cancels)."""
+        self.recording = action
+        self.refill_keys()
+        self.key_buttons[action].grab_focus()
+
+    def set_key(self, action, accel):
+        self.keys[action] = accel
+        self.recording = None
+        self.refill_keys()
+        self.update_problems([])
+
+    def on_key(self, _dialog, event):
+        if self.recording is None:
+            return False
+        keyval = Gdk.keyval_to_lower(event.keyval)
+        mods = Gdk.ModifierType(int(event.state) & int(Gtk.accelerator_get_default_mod_mask()))
+        if keyval == Gdk.KEY_Escape and not int(mods):
+            self.recording = None
+            self.refill_keys()
+            return True
+        name = Gdk.keyval_name(keyval) or ''
+        if name.startswith(('Control', 'Shift', 'Alt', 'Super', 'Meta', 'Hyper', 'ISO_Level', 'Caps')):
+            return True                 # a modifier alone: wait for the key
+        self.offer_key(self.recording, Gtk.accelerator_name(keyval, mods))
+        return True
+
+    def offer_key(self, action, accel):
+        """Take a recorded combination unless it is a key the list needs or a plain key."""
+        label = self.key_label(accel)
+        if is_fixed_key(accel):
+            self.show_key_problem(t(self.lang, 'key_fixed', key=label))
+            return False
+        if not plain_key_ok(accel):
+            self.show_key_problem(t(self.lang, 'key_plain', key=label))
+            return False
+        self.set_key(action, accel)
+        return True
+
+    def show_key_problem(self, text):
+        self.recording = None
+        self.refill_keys()
+        self.update_problems([text], blocked=True)
+
+    def copy_toggle_command(self):
+        command, _ = toggle_command()
+        cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+        cb.set_text(command, -1)
+        cb.store()
 
     # saving
 
-    def update_problems(self, problems, blocked=False):
+    def update_problems(self, lines, blocked=False):
+        """Show problems: blocked ones (one line each, cannot be saved) or warnings listed under
+        a heading, with Save anyway."""
         ctx = self.problems.get_style_context()
         ctx.remove_class('error')
         ctx.remove_class('warning')
-        self.anyway.set_visible(bool(problems) and not blocked)
-        if not problems:
+        self.anyway.set_visible(bool(lines) and not blocked)
+        if not lines:
             self.problems.set_text('')
             self.problems.set_visible(False)
             return
         if blocked:
-            text = t(self.lang, 'set_blocked', reason=core.scope_problem_text('', 'no_roots', self.lang))
+            text = '\n'.join(lines)
             ctx.add_class('error')
         else:
-            text = '\n'.join([t(self.lang, 'set_warn')]
-                             + ['· ' + core.scope_problem_text(item, code, self.lang) for _, item, code in problems])
+            text = '\n'.join([t(self.lang, 'set_warn')] + ['· ' + line for line in lines])
             ctx.add_class('warning')
         self.problems.set_text(text)
         self.problems.set_visible(True)
 
     def save(self, force=False):
-        """'saved', 'warn' (problems listed, not saved) or 'blocked' (nothing to index)."""
+        """'saved', 'warn' (problems listed, not saved) or 'blocked' (cannot be saved)."""
+        lang = self.lang
         roots, exclude = core.tidy_scope(self.roots, self.exclude)
         problems = core.check_scope(roots, exclude, self.mounts)
+        blocked = []
         if any(code == 'no_roots' for _, _, code in problems):
-            self.update_problems(problems, blocked=True)
+            blocked.append(t(lang, 'set_blocked', reason=core.scope_problem_text('', 'no_roots', lang)))
+        for action, other in key_clashes({k: v for k, v in self.keys.items() if k != 'toggle'}):
+            blocked.append(t(lang, 'key_dup', a=t(lang, 'key_' + action), b=t(lang, 'key_' + other)))
+        if blocked:
+            self.update_problems(blocked, blocked=True)
             return 'blocked'
-        if problems and not force:
-            self.update_problems(problems)
+        warnings = [core.scope_problem_text(item, code, lang) for _, item, code in problems]
+        toggle = self.keys['toggle']
+        if toggle and toggle != self.saved_toggle:
+            owner = self.window.hotkey.taken(toggle)
+            if owner:
+                warnings.append(t(lang, 'key_taken', key=self.key_label(toggle), name=owner))
+        if warnings and not force:
+            self.update_problems(warnings)
             return 'warn'
         new = self.config.with_scope(roots, exclude, self.hidden.get_active())
-        if self.window.apply_scope(new):
-            self.dialog.destroy()
+        new.other['keys'] = {k: v for k, v in self.keys.items() if v != KEY_DEFAULTS[k] or k == 'toggle'}
+        same_scope = (new.resolved_roots() == self.config.resolved_roots() and new.exclude == self.config.exclude
+                      and new.hidden == self.config.hidden)
+        ok = self.window.save_config(new) if same_scope else self.window.apply_scope(new)
+        if not ok:
+            return 'blocked'
+        self.window.apply_keys(self.keys)
+        if toggle != self.saved_toggle:
+            self.window.write_hotkey(toggle)
+        self.dialog.destroy()
         return 'saved'
 
     def on_response(self, dialog, response):
@@ -1474,7 +1964,16 @@ def build_app(index, lang=None):
         w = holder['win'] = Window(a, index, lang)
         w.start()
 
+    def toggle(_action, _param):
+        if 'win' in holder:
+            holder['win'].toggle()
+        else:
+            activate(app)
+
     app.connect('activate', activate)
+    action = Gio.SimpleAction.new('toggle', None)
+    action.connect('activate', toggle)
+    app.add_action(action)
     app.holder = holder
     return app
 
@@ -1486,6 +1985,15 @@ def main(args=None):
     config = core.Config(getattr(args, 'config', core.CONFIG_FILE))
     index = core.Index(config, getattr(args, 'cache', core.CACHE_FILE))
     app = build_app(index)
+    if getattr(args, 'toggle', False):
+        # a running window is shown or hidden by the first instance; otherwise start as usual
+        app.register(None)
+        if app.get_is_remote():
+            app.activate_action('toggle', None)
+            conn = app.get_dbus_connection()
+            if conn is not None:
+                conn.flush_sync(None)
+            return 0
     return app.run(sys.argv[:1])
 
 
