@@ -135,12 +135,13 @@ async function noScroll(page, what) {
     if (process.env.SHOT_DIR) await page.screenshot({path: path.join(process.env.SHOT_DIR, 'find-fast-upgrade-360.png'), fullPage: true});
 
     const pid = srv.proc.pid;
-    const loaded = page.waitForEvent('load', {timeout: 60000});
+    const loaded = page.waitForEvent('load', {timeout: 60000}).catch(e => e);
     await page.click('#up-go');
     assert.match(dialogs[dialogs.length - 1], /多出来的文件/);
     assert.ok(await page.isDisabled('#up-go'), 'the button is disabled while upgrading');
     assert.ok(await page.isDisabled('#up-rollback'));
-    await loaded;
+    const r1 = await loaded;
+    if (r1 instanceof Error) throw new Error('no reload after the upgrade: ' + r1.message + ' stages: ' + stages.join(' | '));
     assert.ok(stages.some(s => /正在/.test(s)), stages.join(' | '));
     assert.ok(stages.some(s => s.includes('已升级到 ' + ctx.newVer)), stages.join(' | '));
     assert.strictEqual(srv.proc.exitCode, null, 'the service keeps running');
@@ -153,10 +154,11 @@ async function noScroll(page, what) {
 
     await page.click('#up-open');
     await page.waitForFunction(() => !document.getElementById('up-rollback').disabled);
-    const back = page.waitForEvent('load', {timeout: 60000});
+    const back = page.waitForEvent('load', {timeout: 60000}).catch(e => e);
     await page.click('#up-rollback');
     assert.ok(dialogs[dialogs.length - 1].includes('会把当前 ' + ctx.newVer + ' 换成上一版 ' + ctx.oldVer), dialogs.join('|'));
-    await back;
+    const r2 = await back;
+    if (r2 instanceof Error) throw new Error('no reload after the roll-back: ' + r2.message + ' stages: ' + stages.join(' | '));
     const st2 = await page.evaluate(t => fetch('/api/upgrade', {headers: {'X-Token': t}}).then(r => r.json()), token);
     assert.strictEqual(st2.current, ctx.oldVer);
     assert.deepStrictEqual(leftUploads(), []);
