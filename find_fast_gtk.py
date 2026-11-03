@@ -9,6 +9,7 @@ copies the file itself, Ctrl+Shift+C its path; Menu or Shift+F10 opens the conte
 Ctrl+R rescans; Ctrl+, opens the settings; Esc clears the search box, and when it is empty
 closes the window.
 """
+import json
 import logging
 import os
 import sys
@@ -104,6 +105,65 @@ COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('m
 COPY_FILE_TARGETS = ('x-special/gnome-copied-files', 'text/uri-list', 'UTF8_STRING', 'text/plain;charset=utf-8',
                      'text/plain', 'TEXT', 'STRING')
 LOCATE_ICONS = ('find-location-symbolic', 'edit-find-symbolic', 'folder-open-symbolic', 'folder')
+UNFOCUSED_OPACITY = 0.7         # window opacity while another program has the focus (needs a compositor)
+COLUMN_WIDTHS = {'name': 300, 'path': 380, 'size': 90, 'mtime': 140, 'locate': 36}
+MIN_COLUMN_WIDTH = 24
+DEFAULT_SIZE = (960, 600)
+
+
+def load_ui_state(path):
+    """Interface state remembered between runs (column widths, window size, position, sort).
+    Missing or bad values are left out, so the defaults apply to them."""
+    try:
+        with open(path, encoding='utf-8') as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError) as e:
+        log.warning('cannot read %s, using defaults: %s', path, e)
+        return {}
+    if not isinstance(data, dict):
+        log.warning('%s is not an object, using defaults', path)
+        return {}
+    out, bad = {}, []
+
+    def num(key, lo, hi):
+        v = data.get(key)
+        if v is None:
+            return
+        if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi:
+            out[key] = v
+        else:
+            bad.append(key)
+
+    for key in ('width', 'height', 'expanded_height'):
+        num(key, 100, 20000)
+    for key in ('x', 'y'):
+        num(key, -100000, 100000)
+    for key in ('maximized', 'desc'):
+        if key in data:
+            if isinstance(data[key], bool):
+                out[key] = data[key]
+            else:
+                bad.append(key)
+    if 'sort' in data:
+        if data['sort'] in core.SORTS:
+            out['sort'] = data['sort']
+        else:
+            bad.append('sort')
+    cols = data.get('columns')
+    if isinstance(cols, dict):
+        out['columns'] = {}
+        for k, v in cols.items():
+            if k in COLUMN_WIDTHS and isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 20000:
+                out['columns'][k] = max(MIN_COLUMN_WIDTH, v)
+            else:
+                bad.append('columns.' + str(k))
+    elif cols is not None:
+        bad.append('columns')
+    if bad:
+        log.warning('%s: ignoring bad values for %s', path, ', '.join(bad))
+    return out
 COL_TIP = 5                     # store column holding the row's tooltip
 COL_TAG = 6                     # store column holding the similar-version tag
 VERSIONS_SYNC = 5000            # results up to this size are grouped at once, larger ones in the background
@@ -151,13 +211,16 @@ class Window:
     """The search window around an Index. Holds no GTK subclass so it can be built after gi is
     loaded lazily."""
 
-    def __init__(self, app, index, lang=None):
+    def __init__(self, app, index, lang=None, state_path=None):
         self.app = app
         self.index = index
         self.lang = lang or core.ui_language()
+        # interface state lives beside the settings file
+        self.state_path = state_path or os.path.join(os.path.dirname(index.config.path), 'ui-state.json')
+        self.ui_state = load_ui_state(self.state_path)
         self.result = None
-        self.sort = core.DEFAULT_SORT
-        self.desc = True
+        self.sort = self.ui_state.get('sort', core.DEFAULT_SORT)
+        self.desc = self.ui_state.get('desc', True)
         self.top = 0                    # result row shown first
         self.cur = -1                   # selected result row
         self.rows = 1                   # rows that fit
@@ -179,16 +242,26 @@ class Window:
     def build(self):
         w = self.win = Gtk.ApplicationWindow(application=self.app)
         w.set_title(core.text('app_name', self.lang))
-        w.set_default_size(960, 600)
+        st = self.ui_state
+        w.set_default_size(st.get('width', DEFAULT_SIZE[0]), st.get('height', DEFAULT_SIZE[1]))
+        if st.get('maximized'):
+            w.maximize()
+        self.size = (st.get('width', DEFAULT_SIZE[0]), st.get('height', DEFAULT_SIZE[1]))
+        self.maximized = bool(st.get('maximized'))
+        if 'x' in st and 'y' in st and self.can_place(st['x'], st['y']):
+            w.move(st['x'], st['y'])
+        w.connect('configure-event', self.on_configure)
+        w.connect('window-state-event', self.on_window_state)
+        w.connect('notify::is-active', lambda *_: GLib.idle_add(self.update_opacity))
         w.set_icon_name('system-search')
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         w.add(box)
 
         top = self.top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        top.set_margin_start(8)
-        top.set_margin_end(8)
-        top.set_margin_top(8)
-        top.set_margin_bottom(6)
+        top.set_margin_start(6)
+        top.set_margin_end(6)
+        top.set_margin_top(4)
+        top.set_margin_bottom(4)
         self.entry = Gtk.SearchEntry()
         self.entry.set_placeholder_text(t(self.lang, 'search'))
         self.entry.connect('search-changed', self.on_search_changed)
@@ -226,13 +299,14 @@ class Window:
                 # a button-like icon at the end of every row
                 theme = Gtk.IconTheme.get_default()
                 icon = Gtk.CellRendererPixbuf()
+                icon.set_padding(2, 1)
                 icon.set_property('icon-name', next((n for n in LOCATE_ICONS if theme.has_icon(n)), 'folder'))
                 col.pack_start(icon, True)
                 head = Gtk.Image.new_from_icon_name(icon.get_property('icon-name'), Gtk.IconSize.MENU)
                 head.set_tooltip_text(t(self.lang, 'locate_tip'))
                 head.show()
                 col.set_widget(head)
-                col.set_fixed_width(36)
+                col.set_fixed_width(self.column_width(key))
                 tv.append_column(col)
                 self.columns[key] = col
                 continue
@@ -241,28 +315,26 @@ class Window:
             col.connect('clicked', self.on_header, key)
             if key == 'name':
                 icon = Gtk.CellRendererPixbuf()
+                icon.set_padding(2, 1)
                 col.pack_start(icon, False)
                 col.add_attribute(icon, 'icon-name', 0)
                 tag = Gtk.CellRendererText()
+                tag.set_padding(2, 1)
                 tag.set_property('sensitive', False)       # the theme's secondary text
                 tag.set_property('scale', 0.85)
                 col.pack_start(tag, False)
                 col.add_attribute(tag, 'text', COL_TAG)
-                col.set_fixed_width(300)
                 col.set_expand(False)
             cell = Gtk.CellRendererText()
+            cell.set_padding(4, 1)              # compact rows
             cell.set_property('ellipsize', Pango.EllipsizeMode.MIDDLE if key == 'path' else Pango.EllipsizeMode.END)
             if key in ('size', 'mtime'):
                 cell.set_property('xalign', 1.0 if key == 'size' else 0.0)
             col.pack_start(cell, True)
             col.add_attribute(cell, 'text', i + 1)
+            col.set_fixed_width(self.column_width(key))
             if key == 'path':
-                col.set_fixed_width(380)
                 col.set_expand(True)
-            elif key == 'size':
-                col.set_fixed_width(90)
-            elif key == 'mtime':
-                col.set_fixed_width(140)
             tv.append_column(col)
             self.columns[key] = col
         tv.connect('scroll-event', self.on_scroll)
@@ -286,11 +358,11 @@ class Window:
         row.pack_start(self.sw, True, True, 0)
         row.pack_start(self.scrollbar, False, False, 0)
 
-        bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        bar.set_margin_start(8)
-        bar.set_margin_end(8)
-        bar.set_margin_top(4)
-        bar.set_margin_bottom(4)
+        bar = self.bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bar.set_margin_start(6)
+        bar.set_margin_end(6)
+        bar.set_margin_top(2)
+        bar.set_margin_bottom(2)
         self.status = Gtk.Label(xalign=0)
         self.status.set_ellipsize(Pango.EllipsizeMode.END)
         self.status.set_selectable(False)
@@ -317,6 +389,7 @@ class Window:
         item.connect('activate', lambda *_: self.start_refresh())
         self.menu.append(item)
         self.menu.show_all()
+        self.menu.connect('deactivate', lambda *_: GLib.idle_add(self.update_opacity))
 
         w.connect('delete-event', self.on_delete)
         w.connect('destroy', lambda *_: setattr(self, 'closed', True))
@@ -512,7 +585,9 @@ class Window:
         return False
 
     def on_delete(self, *_):
-        """Close: stop a scan in progress; a cache being written is finished first."""
+        """Close: remember the interface state, stop a scan in progress; a cache being written
+        is finished first."""
+        self.save_ui_state()
         self.stop.set()
         self.win.hide()
         w = self.worker
@@ -530,6 +605,79 @@ class Window:
     def quit(self):
         self.index.close()
         self.app.quit()
+
+    # ------------------------------------------------------------ interface state and opacity
+
+    def column_width(self, key):
+        return self.ui_state.get('columns', {}).get(key, COLUMN_WIDTHS[key])
+
+    @staticmethod
+    def on_wayland():
+        return 'wayland' in type(Gdk.Display.get_default()).__name__.lower()
+
+    def can_place(self, x, y):
+        """True when a window corner at (x, y) is on a monitor and the desktop lets programs
+        place windows (not under Wayland)."""
+        if self.on_wayland():
+            return False
+        display = Gdk.Display.get_default()
+        for i in range(display.get_n_monitors()):
+            g = display.get_monitor(i).get_geometry()
+            if g.x <= x < g.x + g.width and g.y <= y < g.y + g.height:
+                return True
+        return False
+
+    def on_configure(self, win, _event):
+        if not self.maximized:
+            self.size = tuple(win.get_size())
+        return False
+
+    def on_window_state(self, _win, event):
+        self.maximized = bool(event.new_window_state & Gdk.WindowState.MAXIMIZED)
+        return False
+
+    def ui_state_now(self):
+        st = {'width': self.size[0], 'height': self.size[1], 'maximized': self.maximized,
+              'sort': self.sort, 'desc': self.desc,
+              'columns': {k: c.get_width() or c.get_fixed_width() for k, c in self.columns.items()}}
+        if not self.on_wayland() and not self.maximized:
+            st['x'], st['y'] = self.win.get_position()
+        for key in ('expanded_height',):
+            if key in self.ui_state:
+                st[key] = self.ui_state[key]
+        return st
+
+    def save_ui_state(self):
+        try:
+            core.write_private(self.state_path, json.dumps(self.ui_state_now(), indent=2).encode('utf-8'))
+        except OSError as e:
+            log.warning('cannot write %s: %s', self.state_path, e)
+
+    def composited(self):
+        return self.win.get_screen().is_composited()
+
+    def window_active(self):
+        return self.win.is_active()
+
+    def own_popup_active(self):
+        """The context menu or a dialog of this window is in use."""
+        if self.menu.get_visible():
+            return True
+        return any(top.is_active() and top.get_transient_for() is self.win for top in Gtk.Window.list_toplevels())
+
+    def update_opacity(self):
+        """Fade the window while another program has the focus; never without a compositor."""
+        if self.closed:
+            return False
+        if not self.composited():
+            if not getattr(self, 'opacity_logged', False):
+                log.debug('no compositor; the window stays opaque')
+                self.opacity_logged = True
+            Gtk.Widget.set_opacity(self.win, 1.0)
+            return False
+        away = not self.window_active() and not self.own_popup_active()
+        Gtk.Widget.set_opacity(self.win, UNFOCUSED_OPACITY if away else 1.0)
+        return False
 
     # ------------------------------------------------------------ search
 

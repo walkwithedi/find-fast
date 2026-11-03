@@ -8,6 +8,7 @@
 - Open containing folder is now called Locate (Ctrl+Enter); every result row ends with a locate button. When the file manager cannot select the item, the folder is opened and the status bar says so.
 - Copy file (window only): the file or folder itself goes on the clipboard (x-special/gnome-copied-files, text/uri-list and the path as text), so a file manager pastes the item. Ctrl+C now copies the file and Ctrl+Shift+C the path; the browser page keeps Ctrl+C for the path.
 - The context menu reads: locate, open, copy file, copy path, then go to the newest version, exclude, rescan.
+- Window: rows and margins are more compact (fonts and colours still follow the system); while another program has the focus the window is 70 % opaque, given a desktop compositor (the context menu and the window's own dialogs do not count). Column widths, window size, maximised state, position (not under Wayland, and only when still on a monitor) and the sort are remembered in `~/.config/find-fast/ui-state.json` (mode 600); bad values fall back to defaults. The browser page is unchanged.
 - Right-click a result: Exclude this folder (folder rows) or Exclude the containing folder (file rows), after a confirmation naming the folder.
 
 ## 0.1.0

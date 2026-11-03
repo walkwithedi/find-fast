@@ -366,6 +366,100 @@ class GtkTest(unittest.TestCase):
         w.copy_file()
         self.assertTrue(w.status.get_text().startswith('Copy failed: the file no longer exists'))
 
+    def test_ui_state_saved_and_restored(self):
+        w = self.window()
+        state = os.path.join(self.tmp, 'ui-state.json')
+        self.assertEqual(w.state_path, state)
+        w.columns['name'].set_fixed_width(222)
+        w.win.resize(700, 420)
+        pump(0.3)
+        w.columns['size'].clicked()
+        pump(0.05)
+        w.on_delete()
+        self.assertTrue(pump(until=lambda: self.quit_called))
+        import json
+        with open(state, encoding='utf-8') as f:
+            saved = json.load(f)
+        self.assertEqual(oct(os.stat(state).st_mode & 0o777), '0o600')
+        self.assertEqual(saved['columns']['name'], 222)
+        self.assertEqual((saved['width'], saved['height']), (700, 420))
+        self.assertEqual((saved['sort'], saved['desc']), ('size', True))
+        self.assertIn('locate', saved['columns'])
+        w.win.destroy()
+        w2 = self.w = ui.Window(self.app, self.index, 'en')
+        self.assertEqual(w2.columns['name'].get_fixed_width(), 222)
+        self.assertEqual(w2.win.get_default_size(), (700, 420))
+        self.assertEqual((w2.sort, w2.desc), ('size', True))
+        self.assertTrue(w2.columns['size'].get_sort_indicator())
+
+    def test_bad_ui_state_uses_defaults(self):
+        state = os.path.join(self.tmp, 'ui-state.json')
+        with open(state, 'w') as f:
+            f.write('{not json')
+        self.assertEqual(ui.load_ui_state(state), {})
+        with open(state, 'w') as f:
+            f.write('[]')
+        self.assertEqual(ui.load_ui_state(state), {})
+        import json
+        with open(state, 'w') as f:
+            json.dump({'width': 'wide', 'height': 500, 'sort': 'colour', 'desc': 1, 'maximized': False,
+                       'columns': {'name': 3, 'path': -5, 'bogus': 50}, 'x': 10}, f)
+        self.assertEqual(ui.load_ui_state(state), {'height': 500, 'maximized': False,
+                                                   'columns': {'name': ui.MIN_COLUMN_WIDTH}, 'x': 10})
+        w = self.window(start=False)
+        self.assertEqual(w.win.get_default_size(), (ui.DEFAULT_SIZE[0], 500))
+        self.assertEqual(w.columns['path'].get_fixed_width(), ui.COLUMN_WIDTHS['path'])
+        self.assertEqual(w.sort, core.DEFAULT_SORT)
+        self.assertFalse(w.can_place(-50000, -50000))
+        self.assertTrue(w.can_place(0, 0))
+
+    def test_opacity_follows_focus(self):
+        w = self.window()
+        w.composited = lambda: True
+        w.window_active = lambda: False
+        w.update_opacity()
+        self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), ui.UNFOCUSED_OPACITY, places=2)
+        w.window_active = lambda: True
+        w.update_opacity()
+        self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), 1.0, places=2)
+        # the context menu or a dialog of the window does not count as leaving it
+        self.type('report')
+        w.cur = 0
+        w.popup_menu(None)
+        w.window_active = lambda: False
+        self.assertTrue(w.own_popup_active())
+        w.update_opacity()
+        self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), 1.0, places=2)
+        w.menu.popdown()
+        w.update_opacity()
+        self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), ui.UNFOCUSED_OPACITY, places=2)
+        # without a compositor the window stays opaque
+        w.composited = lambda: False
+        w.update_opacity()
+        self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), 1.0, places=2)
+
+    def test_rows_are_compact(self):
+        w = self.window()
+        self.type('')
+        pump(0.2)
+        Gtk = ui.Gtk
+        ref = Gtk.Window()
+        store = Gtk.ListStore(str)
+        store.append(['report-draft.docx'])
+        tv = Gtk.TreeView(model=store)
+        col = Gtk.TreeViewColumn('x')
+        cell = Gtk.CellRendererText()
+        col.pack_start(cell, True)
+        col.add_attribute(cell, 'text', 0)
+        tv.append_column(col)
+        ref.add(tv)
+        ref.show_all()
+        pump(0.2)
+        default = tv.get_background_area(Gtk.TreePath.new_first(), col).height
+        ref.destroy()
+        self.assertGreater(w.row_height, 0)
+        self.assertLess(w.row_height, default)
+
     def test_open_missing_file(self):
         w = self.window()
         self.type('notes')

@@ -73,6 +73,8 @@ Folders appear in the results as well.
 - The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
 - F5 or Ctrl+R rescans; Esc clears the box, and a second Esc closes the window.
+- While another program has the focus the window is 70 % opaque, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
+- Column widths, window size, maximised state, position and sort are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults; a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
 - The status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
 
 ### Similar versions
@@ -153,7 +155,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
-- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file.
+- 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused.
 - 0.1.0: first version.
 
 ## Licence
