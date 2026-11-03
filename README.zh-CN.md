@@ -14,7 +14,7 @@
 
 | 文件 | 作用 |
 | --- | --- |
-| `双击运行.desktop` | 双击入口，显示为「秒搜文件」。 |
+| `秒搜文件.desktop` | 双击入口，显示为「秒搜文件」。 |
 | `install.sh` | 可选安装：装到 `~/.local`，加命令 `find-fast` 和应用菜单项。 |
 | `find_fast.py` | 入口：不带参数打开窗口，带查询词时在终端输出结果。 |
 | `find_fast_core.py` | 索引与搜索：扫描、缓存、查询语法、inotify。 |
@@ -31,7 +31,7 @@
 
 ## 使用方法
 
-从 Releases 下载 `find-fast-v<版本>.zip` 解压，双击 `双击运行.desktop`；或在终端运行 `python3 find_fast.py`。桌面上可以放它的链接，不要复制（复制后找不到同目录的程序）。
+从 Releases 下载 `find-fast-v<版本>.zip` 解压，双击 `秒搜文件.desktop`；或在终端运行 `python3 find_fast.py`。桌面上可以放它的链接（在文件管理器里右键它，选「发送到桌面快捷方式」），不要复制（复制后找不到同目录的程序）。0.4.0 起入口由 `双击运行.desktop` 改名为 `秒搜文件.desktop`，与其他工具的入口不再重名；之前放在桌面的旧链接会失效，需从工具目录重新「发送到桌面快捷方式」。
 
 想从应用菜单打开，运行一次 `bash install.sh`。它把工具复制到 `~/.local/share/find-fast`，建立命令 `~/.local/bin/find-fast` 和菜单项「秒搜文件」，并写入默认唤起快捷键 Ctrl+Alt+Space（见下文「全局快捷键」），不需要 root。`bash install.sh --uninstall` 卸载，设置和索引保留。
 

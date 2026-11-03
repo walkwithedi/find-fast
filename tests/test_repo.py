@@ -55,7 +55,7 @@ class DesktopEntryTest(unittest.TestCase):
         import configparser
         import subprocess
         import tempfile
-        path = os.path.join(ROOT, "双击运行.desktop")
+        path = os.path.join(ROOT, "秒搜文件.desktop")
         c = configparser.RawConfigParser()
         c.optionxform = str
         c.read(path, encoding="utf-8")
@@ -76,6 +76,14 @@ class DesktopEntryTest(unittest.TestCase):
             out = subprocess.run([a if a != "%k" else link for a in args], capture_output=True, text=True,
                                  env=env, timeout=30).stdout.strip()
         self.assertEqual(out, os.path.join(ROOT, "find_fast.py"))
+
+    def test_launcher_name_and_release_list(self):
+        # the launcher is named after its Name, so links sent to the desktop do not clash with other tools'
+        self.assertFalse(os.path.exists(os.path.join(ROOT, "双击运行.desktop")))
+        with open(os.path.join(ROOT, ".github", "workflows", "release.yml"), encoding="utf-8") as f:
+            release = f.read()
+        self.assertIn(" 秒搜文件.desktop ", release)
+        self.assertNotIn("双击运行", release)
 
 
 class InstallTest(unittest.TestCase):
