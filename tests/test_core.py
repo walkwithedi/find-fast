@@ -412,6 +412,19 @@ class SettingsTest(TempTree):
         idx.refresh()
         self.assertFalse(any(p.startswith('pics') for p in self.all_paths(idx)))
 
+    def test_waits_for_a_scan_already_running(self):
+        idx = self.index()
+        idx.state = 'scanning'          # as if another rescan were running
+        out = []
+        t = threading.Thread(target=lambda: out.append(idx.reconfigure(self.scope(hidden=True))))
+        t.start()
+        time.sleep(0.3)
+        self.assertEqual(out, [])
+        idx.state = 'ready'
+        t.join(10)
+        self.assertEqual(out, ['rescanned'])
+        self.assertIn('.hidden/secret-report.txt', self.all_paths(idx))
+
     def test_stopped_rescan(self):
         idx = self.index()
         stop = threading.Event()

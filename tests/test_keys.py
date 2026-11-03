@@ -99,8 +99,11 @@ class AccelTest(unittest.TestCase):
 
     def test_load_keys(self):
         c = core.Config('/nonexistent-dir/config.json', {'keys': {'locate': '<Alt>l', 'copy_file': 'Return',
-                                                                  'rescan': '<Bad>x', 'unknown': 'F2'}})
+                                                                  'rescan': '<Bad>x', 'unknown': 'F2',
+                                                                  'focus': 'q', 'toggle': 'Escape'}})
         keys = ui.load_keys(c)
+        self.assertEqual(keys['focus'], ui.KEY_DEFAULTS['focus'])               # a plain letter is refused
+        self.assertEqual(keys['toggle'], '')
         self.assertEqual(keys['locate'], '<Alt>l')
         self.assertEqual(keys['copy_file'], ui.KEY_DEFAULTS['copy_file'])        # a fixed key is refused
         self.assertEqual(keys['rescan'], ui.KEY_DEFAULTS['rescan'])

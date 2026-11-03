@@ -219,7 +219,7 @@ def load_keys(config):
         if action not in KEY_DEFAULTS:
             continue
         c = canonical_accel(accel)
-        if c is None or (action != 'toggle' and is_fixed_key(accel)):
+        if c is None or is_fixed_key(accel) or not plain_key_ok(accel):
             log.warning('settings: bad shortcut %r for %s; the default is used', accel, action)
             continue
         keys[action] = accel.strip()
@@ -801,7 +801,11 @@ class Window:
             self.win.hide()
             return
         self.win.show()
-        self.win.present_with_time(Gtk.get_current_event_time() or GLib.get_monotonic_time() // 1000)
+        stamp = Gtk.get_current_event_time()
+        if stamp:
+            self.win.present_with_time(stamp)
+        else:
+            self.win.present()
         self.entry.grab_focus()
         self.entry.select_region(0, -1)
 

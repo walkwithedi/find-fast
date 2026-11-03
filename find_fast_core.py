@@ -1409,6 +1409,13 @@ class Index:
             self._prune()
             return 'pruned'
         full = (config.hidden and not old.hidden) or not added_only
+        # a scan started elsewhere (a rescan, an inotify overflow) runs with the old settings:
+        # wait for it, then scan with the new ones
+        while self.state == 'scanning':
+            if stop is not None and stop.wait(0.1):
+                return 'stopped'
+            if stop is None:
+                time.sleep(0.1)
         done = self.refresh_and_watch(full=full, stop=stop)
         return 'rescanned' if done else 'stopped'
 
