@@ -101,7 +101,8 @@ def open_path(path):
 
 
 def show_in_folder(path):
-    """Show the item in the file manager (FileManager1 through gdbus), else open its folder."""
+    """Show the item selected in the file manager (FileManager1 through gdbus), else open its
+    folder. True when the item could be selected."""
     if shutil.which('gdbus'):
         try:
             p = subprocess.run(['gdbus', 'call', '--session', '--dest', 'org.freedesktop.FileManager1',
@@ -110,10 +111,11 @@ def show_in_folder(path):
                                 json.dumps([file_uri(path)]).replace('"', "'"), ''],
                                stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
             if p.returncode == 0:
-                return
+                return True
         except (OSError, subprocess.TimeoutExpired) as e:
             log.debug('gdbus failed: %s', e)
     open_path(os.path.dirname(path))
+    return False
 
 
 class WebState:
@@ -468,11 +470,11 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(410, {'error': msg('gone')})
                 return
             try:
-                (st.opener if url.path == '/api/open' else st.folder_opener)(path)
+                done = (st.opener if url.path == '/api/open' else st.folder_opener)(path)
             except OSError as e:
                 self.send_json(500, {'error': str(e)})
                 return
-            self.send_json(200, {'ok': True})
+            self.send_json(200, {'ok': True, 'selected': done is not False})
         elif url.path == '/api/settings':
             roots, exclude = data.get('roots'), data.get('exclude')
             if not isinstance(roots, list) or not isinstance(exclude, list):

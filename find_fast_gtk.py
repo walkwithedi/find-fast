@@ -4,9 +4,10 @@
 The result list is virtual: a Gtk.TreeView whose ListStore holds only the rows that fit on
 screen, refilled from the search result as the separate scroll bar moves, so the number of
 results is not limited. Keyboard: type to search; Down moves into the list; Up/Down, Page
-Up/Down, Home/End move; Enter opens; Ctrl+Enter opens the containing folder; Ctrl+C copies the
-path; Menu or Shift+F10 opens the context menu; F5 or Ctrl+R rescans; Esc clears the search
-box, and when it is empty closes the window.
+Up/Down, Home/End move; Enter opens; Ctrl+Enter locates the item in the file manager; Ctrl+C
+copies the file itself, Ctrl+Shift+C its path; Menu or Shift+F10 opens the context menu; F5 or
+Ctrl+R rescans; Ctrl+, opens the settings; Esc clears the search box, and when it is empty
+closes the window.
 """
 import logging
 import os
@@ -27,7 +28,11 @@ UI = {
     'zh': {
         'search': '搜索文件名……（* ? 通配，ext:pdf，path:，!排除，a|b）',
         'col_name': '名称', 'col_path': '路径', 'col_size': '大小', 'col_mtime': '修改时间',
-        'open': '打开', 'open_folder': '打开所在文件夹', 'copy_path': '复制路径', 'rescan': '重新扫描',
+        'open': '打开', 'open_folder': '定位', 'copy_path': '复制路径', 'copy_file': '复制文件', 'rescan': '重新扫描',
+        'col_locate': '定位', 'locate_tip': '在文件管理器中打开所在文件夹并选中', 'locate_item': '定位 {name}',
+        'located_folder': '已打开所在文件夹，文件管理器不支持自动选中',
+        'copied_file': '已复制文件：{path}，可在文件管理器或其他程序中粘贴',
+        'copy_gone': '复制失败：文件已不存在。请重新扫描后再试。',
         'loading': '正在载入索引……',
         'first_scan': '首次建立索引：{dirs} 个文件夹，{files} 个条目……',
         'scanning': '正在更新索引：{dirs} 个文件夹……',
@@ -58,7 +63,12 @@ UI = {
     'en': {
         'search': 'Search file names... (* ? wildcards, ext:pdf, path:, !not, a|b)',
         'col_name': 'Name', 'col_path': 'Path', 'col_size': 'Size', 'col_mtime': 'Modified',
-        'open': 'Open', 'open_folder': 'Open containing folder', 'copy_path': 'Copy path', 'rescan': 'Rescan',
+        'open': 'Open', 'open_folder': 'Locate', 'copy_path': 'Copy path', 'copy_file': 'Copy file', 'rescan': 'Rescan',
+        'col_locate': 'Locate', 'locate_tip': 'Open the containing folder in the file manager and select the item',
+        'locate_item': 'Locate {name}',
+        'located_folder': 'Opened the containing folder; the file manager cannot select the item',
+        'copied_file': 'File copied: {path}; paste it in a file manager or another program',
+        'copy_gone': 'Copy failed: the file no longer exists. Rescan and try again.',
         'loading': 'Loading the index...',
         'first_scan': 'Building the index: {dirs} folders, {files} entries...',
         'scanning': 'Updating the index: {dirs} folders...',
@@ -88,7 +98,12 @@ UI = {
         'save_failed': 'Save failed: {error}. Check that the settings folder is writable.',
     },
 }
-COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime')]
+COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime'),
+           ('locate', 'col_locate')]
+# clipboard formats offered by "copy file": file managers paste the file, other programs the path
+COPY_FILE_TARGETS = ('x-special/gnome-copied-files', 'text/uri-list', 'UTF8_STRING', 'text/plain;charset=utf-8',
+                     'text/plain', 'TEXT', 'STRING')
+LOCATE_ICONS = ('find-location-symbolic', 'edit-find-symbolic', 'folder-open-symbolic', 'folder')
 COL_TIP = 5                     # store column holding the row's tooltip
 COL_TAG = 6                     # store column holding the similar-version tag
 VERSIONS_SYNC = 5000            # results up to this size are grouped at once, larger ones in the background
@@ -195,7 +210,8 @@ class Window:
         # icon name, name, folder, size, time, tooltip (Pango markup), similar-version tag
         self.store = Gtk.ListStore(str, str, str, str, str, str, str)
         tv = self.tree = Gtk.TreeView(model=self.store)
-        tv.set_tooltip_column(COL_TIP)
+        tv.set_has_tooltip(True)
+        tv.connect('query-tooltip', self.on_query_tooltip)
         tv.set_enable_search(False)
         tv.set_headers_clickable(True)
         tv.set_fixed_height_mode(True)
@@ -206,6 +222,20 @@ class Window:
         for i, (key, label) in enumerate(COLUMNS):
             col = Gtk.TreeViewColumn(t(self.lang, label))
             col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+            if key == 'locate':
+                # a button-like icon at the end of every row
+                theme = Gtk.IconTheme.get_default()
+                icon = Gtk.CellRendererPixbuf()
+                icon.set_property('icon-name', next((n for n in LOCATE_ICONS if theme.has_icon(n)), 'folder'))
+                col.pack_start(icon, True)
+                head = Gtk.Image.new_from_icon_name(icon.get_property('icon-name'), Gtk.IconSize.MENU)
+                head.set_tooltip_text(t(self.lang, 'locate_tip'))
+                head.show()
+                col.set_widget(head)
+                col.set_fixed_width(36)
+                tv.append_column(col)
+                self.columns[key] = col
+                continue
             col.set_resizable(True)
             col.set_clickable(True)
             col.connect('clicked', self.on_header, key)
@@ -271,8 +301,8 @@ class Window:
         box.pack_start(bar, False, False, 0)
 
         self.menu = Gtk.Menu()
-        for key, cb in (('open', self.open_current), ('open_folder', self.open_folder),
-                        ('copy_path', self.copy_path)):
+        for key, cb in (('open_folder', self.open_folder), ('open', self.open_current),
+                        ('copy_file', self.copy_file), ('copy_path', self.copy_path)):
             item = Gtk.MenuItem(label=t(self.lang, key))
             item.connect('activate', lambda _i, f=cb: f())
             self.menu.append(item)
@@ -674,6 +704,34 @@ class Window:
             text += '\n' + t(self.lang, 'ver_tip', count=v.size(k), path=core.display(self.result.path(v.newest(k))))
         return GLib.markup_escape_text(text, -1)
 
+    def tooltip_markup(self, j, key):
+        """Tooltip of shown row j over column key: 'Locate <name>' over the locate column, the
+        row's tooltip (full path) elsewhere."""
+        if not 0 <= j < len(self.store):
+            return None
+        if key == 'locate':
+            return GLib.markup_escape_text(t(self.lang, 'locate_item', name=self.store[j][1]), -1)
+        return self.store[j][COL_TIP]
+
+    def on_query_tooltip(self, tv, x, y, keyboard, tooltip):
+        ok, bx, by, _model, path, _it = tv.get_tooltip_context(x, y, keyboard)
+        if not ok or path is None:
+            return False
+        key = None
+        if not keyboard:
+            hit = tv.get_path_at_pos(bx, by)
+            if hit is not None:
+                key = next((k for k, c in self.columns.items() if c is hit[1]), None)
+        markup = self.tooltip_markup(path.get_indices()[0], key)
+        if not markup:
+            return False
+        tooltip.set_markup(markup)
+        if key == 'locate':
+            tv.set_tooltip_cell(tooltip, path, self.columns['locate'], None)
+        else:
+            tv.set_tooltip_row(tooltip, path)
+        return True
+
     def scroll_to(self, k):
         """Make result row k visible and selected."""
         n = self.count()
@@ -756,7 +814,7 @@ class Window:
                 self.open_current()
             return True
         if ctrl and key in (Gdk.KEY_c, Gdk.KEY_C):
-            self.copy_path()
+            (self.copy_path if shift else self.copy_file)()
             return True
         if key == Gdk.KEY_Menu or (shift and key == Gdk.KEY_F10):
             self.popup_menu(None)
@@ -777,6 +835,11 @@ class Window:
         if hit is None:
             return False
         k = self.top + hit[0].get_indices()[0]
+        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS and hit[1] is self.columns['locate']:
+            self.cur = k
+            self.fill()
+            self.open_folder()
+            return True
         if event.button == 3:
             self.cur = k
             self.fill()
@@ -832,12 +895,14 @@ class Window:
             self.show_message(t(self.lang, 'open_failed', error=getattr(e, 'message', None) or e), 'bad')
 
     def open_folder(self):
+        """Locate: show the item selected in the file manager, else open its folder."""
         path = self.current_path()
         if path is None:
             return
         try:
             if not self.show_in_file_manager(path):
                 self.open_uri(file_uri(os.path.dirname(path)))
+                self.show_message(t(self.lang, 'located_folder'), 'info')
         except Exception as e:
             self.show_message(t(self.lang, 'open_failed', error=getattr(e, 'message', None) or e), 'bad')
 
@@ -852,6 +917,45 @@ class Window:
         except Exception as e:
             log.info('FileManager1 unavailable: %s', e)
             return False
+
+    def copy_file(self):
+        """Put the selected file (or folder) itself on the clipboard: file managers paste the
+        item, other programs get its path."""
+        path = self.current_path()
+        if path is None:
+            return
+        if not os.path.lexists(path):
+            self.show_message(t(self.lang, 'copy_gone'), 'bad')
+            return
+        try:
+            if not getattr(self, 'clip_targets', None):
+                self.clip_targets = [Gdk.Atom.intern(n, False) for n in COPY_FILE_TARGETS]
+                Gtk.selection_clear_targets(self.win, Gdk.SELECTION_CLIPBOARD)
+                for i, atom in enumerate(self.clip_targets):
+                    Gtk.selection_add_target(self.win, Gdk.SELECTION_CLIPBOARD, atom, i)
+                self.win.connect('selection-get', self.on_selection_get)
+            self.clip_path = path
+            if not Gtk.selection_owner_set(self.win, Gdk.SELECTION_CLIPBOARD, Gtk.get_current_event_time()):
+                raise RuntimeError('clipboard refused')
+            cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
+            cb.set_can_store([Gtk.TargetEntry.new(n, 0, i) for i, n in enumerate(COPY_FILE_TARGETS)])
+            self.show_message(t(self.lang, 'copied_file', path=core.display(path)), 'ok')
+        except Exception as e:
+            log.warning('copy file failed: %s', e)
+            self.show_message(t(self.lang, 'copy_failed'), 'bad')
+
+    def on_selection_get(self, _widget, data, _info, _time):
+        path = getattr(self, 'clip_path', None)
+        if path is None:
+            return
+        uri = file_uri(path)
+        name = data.get_target().name()
+        if name == 'x-special/gnome-copied-files':
+            data.set(data.get_target(), 8, ('copy\n' + uri).encode('ascii'))
+        elif name == 'text/uri-list':
+            data.set(data.get_target(), 8, (uri + '\r\n').encode('ascii'))
+        else:
+            data.set_text(core.display(path), -1)
 
     def copy_path(self):
         path = self.current_path()

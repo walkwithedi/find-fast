@@ -39,6 +39,9 @@
   td.dir { color:var(--muted); word-break:break-all; font-size:13.5px; }
   td.size, td.time { white-space:nowrap; font-variant-numeric:tabular-nums; }
   td.size { text-align:right; }
+  td.loc { width:1%; padding:2px 6px; }
+  td.loc button { padding:2px 7px; font-size:13px; line-height:1.2; }
+  th.loc { width:1%; padding:6px 10px; }
   tr[aria-selected="true"] td { background:var(--sel); }
   tbody tr { cursor:default; }
   .kind { display:inline-block; width:1.4em; color:var(--muted); }
@@ -102,7 +105,7 @@
   <p class="help" id="help"></p>
   <div class="actions">
     <button id="open" type="button" disabled>打开</button>
-    <button id="folder" type="button" disabled>打开所在文件夹</button>
+    <button id="folder" type="button" disabled>定位</button>
     <button id="copy" type="button" disabled>复制路径</button>
     <button id="rescan" type="button">重新扫描</button>
   </div>
@@ -114,6 +117,7 @@
         <th data-sort="path"><button type="button" id="hPath">路径</button></th>
         <th data-sort="size"><button type="button" id="hSize">大小</button></th>
         <th data-sort="mtime"><button type="button" id="hTime">修改时间</button></th>
+        <th class="loc" id="hLoc">定位</th>
       </tr></thead>
       <tbody id="rows" role="listbox" tabindex="-1"></tbody>
     </table>
@@ -121,8 +125,8 @@
   <button id="more" type="button">显示更多</button>
   <div id="closed">服务已退出，可关闭本页。</div>
   <div id="ctx" role="menu" hidden>
+    <button type="button" role="menuitem" id="mFolder">定位</button>
     <button type="button" role="menuitem" id="mOpen">打开</button>
-    <button type="button" role="menuitem" id="mFolder">打开所在文件夹</button>
     <button type="button" role="menuitem" id="mCopy">复制路径</button>
     <hr>
     <button type="button" role="menuitem" id="mJump">跳到最新版</button>
@@ -168,7 +172,9 @@ const T = {
     title: '秒搜文件', quit: '退出', search: '搜索', placeholder: '搜索文件名……', sort: '排序',
     sorts: ['最新在前', '最旧在前', '名称 A→Z', '名称 Z→A', '路径 A→Z', '最大在前', '最小在前'],
     help: '多个词同时匹配；a|b 任一；!a 排除；* ? 通配整个文件名；ext:pdf;docx；path: 或带 / 的词匹配完整路径；regex: 正则。',
-    open: '打开', folder: '打开所在文件夹', copy: '复制路径', rescan: '重新扫描', more: '显示更多',
+    open: '打开', folder: '定位', copy: '复制路径', colLocate: '定位',
+    locateTip: '在文件管理器中打开所在文件夹并选中', locateItem: n => '定位 ' + n,
+    locatedFolder: '已打开所在文件夹，文件管理器不支持自动选中', rescan: '重新扫描', more: '显示更多',
     cols: ['名称', '路径', '大小', '修改时间'],
     results: n => n + ' 个结果', results_ms: (n, ms) => n + ' 个结果（' + ms + ' 毫秒）',
     entries: n => '共 ' + n + ' 个条目', scanning: (d, f) => '正在更新索引：' + d + ' 个文件夹，' + f + ' 个条目……',
@@ -198,7 +204,9 @@ const T = {
     title: 'find-fast', quit: 'Quit', search: 'Search', placeholder: 'Search file names...', sort: 'Sort',
     sorts: ['Newest first', 'Oldest first', 'Name A→Z', 'Name Z→A', 'Path A→Z', 'Largest first', 'Smallest first'],
     help: 'Words must all match; a|b either; !a not; * ? match a whole name; ext:pdf;docx; path: or a word with / matches the whole path; regex: a regular expression.',
-    open: 'Open', folder: 'Open containing folder', copy: 'Copy path', rescan: 'Rescan', more: 'Show more',
+    open: 'Open', folder: 'Locate', copy: 'Copy path', colLocate: 'Locate',
+    locateTip: 'Open the containing folder in the file manager and select the item', locateItem: n => 'Locate ' + n,
+    locatedFolder: 'Opened the containing folder; the file manager cannot select the item', rescan: 'Rescan', more: 'Show more',
     cols: ['Name', 'Path', 'Size', 'Modified'],
     results: n => n + ' results', results_ms: (n, ms) => n + ' results (' + ms + ' ms)',
     entries: n => n + ' entries', scanning: (d, f) => 'Updating the index: ' + d + ' folders, ' + f + ' entries...',
@@ -289,6 +297,7 @@ function applyLanguage(lang) {
   Array.from($('sort').options).forEach((o, i) => { o.textContent = L.sorts[i]; });
   $('help').textContent = L.help;
   $('open').textContent = L.open; $('folder').textContent = L.folder; $('copy').textContent = L.copy;
+  $('folder').title = L.locateTip; $('mFolder').title = L.locateTip; $('hLoc').textContent = L.colLocate;
   $('rescan').textContent = L.rescan; $('more').textContent = L.more;
   ['hName', 'hPath', 'hSize', 'hTime'].forEach((id, i) => { $(id).textContent = L.cols[i]; });
   $('rule').textContent = L.rule;
@@ -364,7 +373,12 @@ function renderRow(r) {
   const dir = document.createElement('td'); dir.className = 'dir'; dir.textContent = r.dir;
   const size = document.createElement('td'); size.className = 'size'; size.textContent = r.size_text;
   const time = document.createElement('td'); time.className = 'time'; time.textContent = r.time;
-  tr.append(name, dir, size, time);
+  const loc = document.createElement('td'); loc.className = 'loc';
+  const lb = document.createElement('button');
+  lb.type = 'button'; lb.className = 'locate'; lb.textContent = '⌕';
+  lb.setAttribute('aria-label', L.locateItem(r.name)); lb.title = L.locateItem(r.name) + '\n' + L.locateTip;
+  loc.append(lb);
+  tr.append(name, dir, size, time, loc);
   return tr;
 }
 
@@ -467,6 +481,7 @@ function loadMore() {
 function openCurrent(folder) {
   if (cur < 0 || !sid) return;
   post(folder ? '/api/open_folder' : '/api/open', {page: PAGE, sid: sid, k: rows[cur].k})
+    .then(j => { if (folder && j.selected === false) setStatus(L.locatedFolder, 'info'); })
     .catch(e => setStatus(L.open_failed(e.message), 'bad'));
 }
 
@@ -496,6 +511,7 @@ $('q').addEventListener('keydown', ev => {
   else if (ev.key === 'Escape') { $('q').value = ''; search(false); }
 });
 $('rows').addEventListener('keydown', ev => {
+  if (ev.target.closest('button.locate') && (ev.key === 'Enter' || ev.key === ' ')) return;   // the button's own click
   const page = 10;
   const moves = {ArrowDown: 1, ArrowUp: -1, PageDown: page, PageUp: -page};
   if (ev.key in moves) {
@@ -511,9 +527,12 @@ $('rows').addEventListener('keydown', ev => {
 });
 $('rows').addEventListener('click', ev => {
   const tr = ev.target.closest('tr');
-  if (tr) select(Array.prototype.indexOf.call($('rows').children, tr), true);
+  if (!tr) return;
+  const loc = ev.target.closest('button.locate');
+  select(Array.prototype.indexOf.call($('rows').children, tr), !loc);
+  if (loc) openCurrent(true);
 });
-$('rows').addEventListener('dblclick', ev => { if (ev.target.closest('tr')) openCurrent(false); });
+$('rows').addEventListener('dblclick', ev => { if (ev.target.closest('tr') && !ev.target.closest('button.locate')) openCurrent(false); });
 $('open').addEventListener('click', () => openCurrent(false));
 $('folder').addEventListener('click', () => openCurrent(true));
 $('copy').addEventListener('click', copyCurrent);

@@ -88,7 +88,9 @@ class GtkTest(unittest.TestCase):
     def test_title_columns_and_language(self):
         w = self.window('zh', start=False)
         self.assertEqual(w.win.get_title(), '秒搜文件')
-        self.assertEqual([c.get_title() for c in w.tree.get_columns()], ['名称', '路径', '大小', '修改时间'])
+        self.assertEqual([c.get_title() for c in w.tree.get_columns()], ['名称', '路径', '大小', '修改时间', '定位'])
+        self.assertEqual([l for l in (i.get_label() for i in w.menu.get_children()) if l],
+                         ['定位', '打开', '复制文件', '复制路径', '跳到最新版', '排除所在文件夹', '重新扫描'])
         w2 = ui.Window(self.app, self.index, 'en')
         self.assertEqual(w2.win.get_title(), 'find-fast')
         w2.win.destroy()
@@ -135,11 +137,19 @@ class GtkTest(unittest.TestCase):
         w.show_in_file_manager = lambda p: False
         w.on_tree_key(w.tree, key(Gdk.KEY_Return, Gdk.ModifierType.CONTROL_MASK))
         self.assertEqual(opened[-1], ui.file_uri(os.path.join(self.root, 'docs')))
-        w.on_tree_key(w.tree, key(Gdk.KEY_c, Gdk.ModifierType.CONTROL_MASK))
+        self.assertTrue(w.status.get_text().startswith('Opened the containing folder'))
+        target = os.path.join(self.root, 'docs', 'report-draft.docx')
+        w.on_tree_key(w.tree, key(Gdk.KEY_C, Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.SHIFT_MASK))
         pump(0.05)
         clip = ui.Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text()
-        self.assertEqual(clip, os.path.join(self.root, 'docs', 'report-draft.docx'))
+        self.assertEqual(clip, target)
         self.assertTrue(w.status.get_text().startswith('Path copied'))
+        w.on_tree_key(w.tree, key(Gdk.KEY_c, Gdk.ModifierType.CONTROL_MASK))
+        pump(0.05)
+        self.assertEqual(self.clipboard('x-special/gnome-copied-files'), b'copy\n' + ui.file_uri(target).encode())
+        self.assertEqual(self.clipboard('text/uri-list'), ui.file_uri(target).encode() + b'\r\n')
+        self.assertEqual(ui.Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text(), target)
+        self.assertTrue(w.status.get_text().startswith('File copied'))
         w.on_entry_key(w.entry, key(Gdk.KEY_Escape))
         self.assertEqual(w.entry.get_text(), '')
         self.assertFalse(self.quit_called)
@@ -154,8 +164,11 @@ class GtkTest(unittest.TestCase):
         w.win.resize(500, 300)
         self.type('')
         pump(0.2)
-        self.assertEqual(w.tree.get_tooltip_column(), ui.COL_TIP)
+        self.assertTrue(w.tree.get_has_tooltip())
         for j, row in enumerate(w.store):
+            self.assertEqual(w.tooltip_markup(j, 'name'), row[ui.COL_TIP])
+            self.assertEqual(w.tooltip_markup(j, 'size'), row[ui.COL_TIP])
+            self.assertEqual(ui.Pango.parse_markup(w.tooltip_markup(j, 'locate'), -1, '\0')[2], 'Locate ' + row[1])
             full = w.result.path(w.top + j)
             self.assertEqual(row[ui.COL_TIP], ui.GLib.markup_escape_text(full, -1))
             ok, _attrs, text, _accel = ui.Pango.parse_markup(row[ui.COL_TIP], -1, '\0')
@@ -323,6 +336,35 @@ class GtkTest(unittest.TestCase):
             core.VERSION_GROUP_LIMIT = old
         self.assertTrue(w.versions.skipped)
         self.assertIn('Too many results to mark similar versions', w.status.get_text())
+
+    def clipboard(self, target):
+        Gtk, Gdk = ui.Gtk, ui.Gdk
+        sd = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_contents(Gdk.Atom.intern(target, False))
+        return None if sd is None else sd.get_data()
+
+    def test_locate_button_and_copy_folder(self):
+        w = self.window()
+        self.type('pics')
+        located = []
+        w.show_in_file_manager = lambda p: located.append(p) or True
+        w.tree.realize()
+        pump(0.1)
+        area = w.tree.get_cell_area(ui.Gtk.TreePath.new_first(), w.columns['locate'])
+        ev = ui.Gdk.Event.new(ui.Gdk.EventType.BUTTON_PRESS)
+        ev.button.button = 1
+        ev.button.x = area.x + area.width / 2
+        ev.button.y = area.y + area.height / 2
+        self.assertTrue(w.on_button(w.tree, ev.button))
+        self.assertEqual(located, [os.path.join(self.root, 'pics')])
+        w.cur = 0
+        w.copy_file()
+        pump(0.05)
+        self.assertEqual(self.clipboard('text/uri-list'), ui.file_uri(os.path.join(self.root, 'pics')).encode() + b'\r\n')
+        self.type('notes')
+        os.remove(os.path.join(self.root, 'docs', 'notes.txt'))
+        w.cur = 0
+        w.copy_file()
+        self.assertTrue(w.status.get_text().startswith('Copy failed: the file no longer exists'))
 
     def test_open_missing_file(self):
         w = self.window()

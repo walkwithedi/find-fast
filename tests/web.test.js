@@ -99,6 +99,23 @@ async function rowNames(page) {
     await page.waitForFunction(() => true);
     for (let i = 0; i < 50 && !fs.existsSync(srv.log); i++) await page.waitForTimeout(100);
     assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim(), path.join(srv.root, 'docs', 'report-draft.docx'));
+    // the locate button at the end of a row; without a file manager service the folder is opened
+    assert.strictEqual(await page.textContent('#folder'), '定位');
+    assert.strictEqual(await page.getAttribute('#rows tr:nth-child(1) button.locate', 'aria-label'), '定位 Report 2024.pdf');
+    await page.click('#rows tr:nth-child(1) button.locate');
+    for (let i = 0; i < 50 && fs.readFileSync(srv.log, 'utf8').trim().split('\n').length < 2; i++) await page.waitForTimeout(100);
+    assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim().split('\n')[1], path.join(srv.root, 'docs'));
+    await page.waitForFunction(() => /已打开所在文件夹/.test(document.getElementById('status').textContent));
+    assert.strictEqual(await page.$eval('tr[aria-selected="true"] td.name', td => td.textContent), 'Report 2024.pdf');
+    await page.focus('#rows tr:nth-child(1) button.locate');
+    await page.keyboard.press('Tab');
+    assert.strictEqual(await page.evaluate(() => document.activeElement.closest('tr').querySelector('td.name').textContent), 'report-draft.docx');
+    assert.ok(await page.evaluate(() => document.activeElement.matches(':focus-visible')
+      && getComputedStyle(document.activeElement).outlineStyle !== 'none'));
+    await page.keyboard.press('Enter');
+    for (let i = 0; i < 50 && fs.readFileSync(srv.log, 'utf8').trim().split('\n').length < 3; i++) await page.waitForTimeout(100);
+    assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim().split('\n').length, 3);
+    await page.click('#rows tr:nth-child(2) td.name');
     await page.keyboard.press('Control+c');
     await page.waitForFunction(() => /已复制路径/.test(document.getElementById('status').textContent));
     assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), path.join(srv.root, 'docs', 'report-draft.docx'));
@@ -147,7 +164,9 @@ async function rowNames(page) {
     await page.click('#rows tr', {button: 'right'});
     assert.ok(await page.isVisible('#ctx'));
     assert.strictEqual(await page.textContent('#mExclude'), '排除所在文件夹');
-    assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'mOpen');
+    assert.deepStrictEqual(await page.$$eval('#ctx button:not([hidden])', bs => bs.map(b => b.textContent)),
+      ['定位', '打开', '复制路径', '排除所在文件夹', '重新扫描']);
+    assert.strictEqual(await page.evaluate(() => document.activeElement.id), 'mFolder');
     let asked = '';
     page.once('dialog', d => { asked = d.message(); d.accept(); });
     await page.click('#mExclude');
