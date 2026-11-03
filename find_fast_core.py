@@ -80,6 +80,7 @@ UNREADABLE_SHOWN = 5
 STRINGS = {
     'zh': {
         'app_name': '秒搜文件',
+        'upgrade_missing': '升级失败：缺少 tool_upgrade.py。请重新解压完整的工具目录后重试。',
         'bad_regex': '正则表达式有误：{error}',
         'no_cache': '还没有索引，正在首次建立……',
         'scan_progress': '正在建立索引：{dirs} 个文件夹，{files} 个条目',
@@ -96,6 +97,7 @@ STRINGS = {
         'scope_outside': '{item}：不在任何索引的文件夹里，这条排除不起作用',
     },
     'en': {
+        'upgrade_missing': 'Upgrade failed: tool_upgrade.py is missing. Unpack the whole tool folder again and retry.',
         'app_name': 'find-fast',
         'bad_regex': 'Invalid regular expression: {error}',
         'no_cache': 'No index yet; building it for the first time...',

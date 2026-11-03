@@ -5,6 +5,7 @@
   2. the tool's own scripts import only the standard library, gi (system PyGObject) and each other
   3. VERSION holds a version, and CHANGELOG.md has a section for it
   4. the page loads nothing from the network: no http(s) URL in a src or href attribute
+  5. tool_upgrade.py is the copy named in TOOL_UPGRADE_VERSION (version and SHA-256; see check_tool_upgrade.py)
 
 stdout: one line per problem and a result line. Exit code 1 when any check fails.
 Usage: python3 scripts/check_repo.py [--log-level LEVEL]
@@ -19,8 +20,8 @@ import sys
 log = logging.getLogger("check_repo")
 LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s.%(funcName)s:%(lineno)d - %(message)s"
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TOOL_SCRIPTS = ["find_fast.py", "find_fast_core.py", "find_fast_gtk.py", "find_fast_web.py"]
-LOCAL_MODULES = {"find_fast", "find_fast_core", "find_fast_gtk", "find_fast_web"}
+TOOL_SCRIPTS = ["find_fast.py", "find_fast_core.py", "find_fast_gtk.py", "find_fast_web.py", "tool_upgrade.py"]
+LOCAL_MODULES = {"find_fast", "find_fast_core", "find_fast_gtk", "find_fast_web", "tool_upgrade"}
 SYSTEM_MODULES = {"gi"}
 PAGE = "find_fast.html"
 
@@ -83,6 +84,9 @@ def main():
         for m in re.finditer(r"\b(?:src|href)\s*=\s*[\"']?\s*(?:https?:)?//", page, re.I):
             line = page.count("\n", 0, m.start()) + 1
             problems.append(f"{PAGE}:{line}: loads something from the network")
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import check_tool_upgrade
+    problems += check_tool_upgrade.offline_problems(ROOT)
     for line in problems:
         print(line)
     print("result: " + (f"{len(problems)} problems" if problems else "ok"))

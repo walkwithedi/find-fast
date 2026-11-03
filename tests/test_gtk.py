@@ -779,5 +779,119 @@ class GtkTest(unittest.TestCase):
             self.assertLess(v, 0.5, k)
 
 
+
+RELEASE = ['find_fast.py', 'find_fast_core.py', 'find_fast_gtk.py', 'find_fast_web.py', 'find_fast.html',
+           '秒搜文件.desktop', 'install.sh', 'tool_upgrade.py', 'upgrade-keep.txt', 'TOOL_UPGRADE_VERSION',
+           'README.md', 'README.zh-CN.md', 'LICENSE', 'CHANGELOG.md', 'VERSION']
+
+
+def release_zip(path, top='find-fast'):
+    import stat
+    import zipfile
+    with zipfile.ZipFile(path, 'w') as z:
+        for n in RELEASE:
+            src = os.path.join(ROOT, n)
+            zi = zipfile.ZipInfo(top + '/' + n)
+            zi.create_system = 3
+            zi.external_attr = (stat.S_IFREG | stat.S_IMODE(os.stat(src).st_mode)) << 16
+            with open(src, 'rb') as f:
+                z.writestr(zi, f.read())
+    return path
+
+
+@unittest.skipUnless(HAVE_GTK, 'needs python3-gi, GTK 3 and a display')
+class GtkUpgradeTest(unittest.TestCase):
+    """Upgrade and Roll back in Settings, on a copy of the tool with an older VERSION."""
+    tearDown = GtkTest.tearDown
+    window = GtkTest.window
+
+    def setUp(self):
+        GtkTest.setUp(self)
+        self.tool = os.path.join(self.tmp, 'apps', 'find-fast')
+        os.makedirs(self.tool)
+        for n in RELEASE:
+            shutil.copy2(os.path.join(ROOT, n), os.path.join(self.tool, n))
+        with open(os.path.join(ROOT, 'CHANGELOG.md'), encoding='utf-8') as f:
+            self.old = [line[3:].strip() for line in f if line.startswith('## ')][1]
+        with open(os.path.join(self.tool, 'VERSION'), 'w') as f:
+            f.write(self.old + '\n')
+        self.new = core.VERSION
+        self.zip = release_zip(os.path.join(self.tmp, 'find-fast-new.zip'))
+        self.saved_dir = ui.TOOL_DIR
+        ui.TOOL_DIR = self.tool
+        self.addCleanup(setattr, ui, 'TOOL_DIR', self.saved_dir)
+
+    def run_upgrade(self, w, how, answer=True):
+        asked, alerts, messages = [], [], []
+        w.confirm = lambda text, detail, ok, cb: (asked.append((text, detail, ok)), cb(answer))
+        w.alert = lambda text, detail: alerts.append((text, detail))
+        real = w.show_message
+        w.show_message = lambda text, kind, seconds=4: (messages.append((text, kind)), real(text, kind, seconds))[1]
+        s = w.open_settings()
+        pump(0.05)
+        return s, asked, alerts, messages
+
+    def test_upgrade_then_roll_back(self):
+        w = self.window('zh')
+        s, asked, alerts, messages = self.run_upgrade(w, 'zip')
+        self.assertIn('当前版本 v' + self.old, s.upgrade_state.get_text())
+        self.assertIn('还没有上一版', s.upgrade_state.get_text())
+        self.assertEqual([b.get_label() for b in s.upgrade_buttons], ['从 zip 升级……', '从解压好的目录升级……', '退回上一版'])
+        self.assertFalse(s.rollback_button.get_sensitive())
+        s.choose_upgrade = lambda how: self.zip
+        s.upgrade_buttons[0].clicked()
+        self.assertTrue(pump(until=lambda: getattr(self.app, 'restart_after_upgrade', False)))
+        self.assertEqual(alerts, [])
+        text, detail, ok = asked[0]
+        self.assertEqual(ok, '升级到 v' + self.new)
+        self.assertIn('当前版本 v%s → 新版本 v%s（升级）' % (self.old, self.new), detail)
+        self.assertIn('更新说明', detail)
+        self.assertIn('升级后窗口用新版重新打开', detail)
+        shown = [m for m, _ in messages]
+        self.assertIn('正在检查……', shown)
+        self.assertIn('正在解压新版……', shown)
+        self.assertTrue(any('已升级到 v' + self.new in m for m in shown), shown)
+        self.assertTrue(w.entry.get_sensitive())        # the search box stays usable
+        self.assertTrue(pump(until=lambda: self.quit_called))
+        with open(os.path.join(self.tool, 'VERSION')) as f:
+            self.assertEqual(f.read().strip(), self.new)
+        prev = os.path.join(self.tmp, 'apps', '.find-fast.上一版')
+        with open(os.path.join(prev, 'VERSION')) as f:
+            self.assertEqual(f.read().strip(), self.old)
+        # roll back from a fresh window
+        self.w.win.destroy()
+        self.app.restart_after_upgrade = False
+        self.quit_called = False
+        w = self.window('zh')
+        s, asked, alerts, messages = self.run_upgrade(w, 'rollback')
+        self.assertTrue(s.rollback_button.get_sensitive())
+        self.assertIn('上一版 v' + self.old, s.upgrade_state.get_text())
+        s.rollback_button.clicked()
+        self.assertTrue(pump(until=lambda: getattr(self.app, 'restart_after_upgrade', False)))
+        self.assertIn('会把当前 v%s 换成上一版 v%s' % (self.new, self.old), asked[0][1])
+        self.assertEqual(asked[0][2], '退回到 v' + self.old)
+        with open(os.path.join(self.tool, 'VERSION')) as f:
+            self.assertEqual(f.read().strip(), self.old)
+
+    def test_refused_and_cancelled(self):
+        w = self.window('en')
+        s, asked, alerts, messages = self.run_upgrade(w, 'zip', answer=False)
+        self.assertEqual(s.upgrade_buttons[0].get_label(), 'Upgrade from a zip…')
+        bad = release_zip(os.path.join(self.tmp, 'bad.zip'), top='other')
+        s.choose_upgrade = lambda how: bad
+        s.upgrade_buttons[0].clicked()
+        self.assertTrue(pump(until=lambda: alerts))
+        self.assertIn('not a release of this tool', alerts[0][1])
+        self.assertFalse(w.upgrading)
+        self.assertTrue(s.upgrade_buttons[0].get_sensitive())
+        s.choose_upgrade = lambda how: self.zip
+        s.upgrade_buttons[1].clicked()
+        self.assertTrue(pump(until=lambda: asked))
+        pump(0.1)
+        self.assertFalse(w.upgrading)                 # cancelled: nothing changed
+        with open(os.path.join(self.tool, 'VERSION')) as f:
+            self.assertEqual(f.read().strip(), self.old)
+        self.assertFalse(getattr(self.app, 'restart_after_upgrade', False))
+
 if __name__ == '__main__':
     unittest.main()

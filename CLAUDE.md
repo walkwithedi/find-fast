@@ -9,8 +9,9 @@ find-fast（秒搜文件）是 Linux 桌面上的全盘文件名搜索工具：P
 - `find_fast_gtk.py`：GTK3 窗口。
 - `find_fast_web.py`、`find_fast.html`：网页退回（本机服务与页面）。
 - `秒搜文件.desktop`、`install.sh`：双击入口（文件名与 Name 一致，不与其他工具的入口重名）与可选安装脚本。
-- `tests/`：unittest；`tests/test_gtk.py` 在 xvfb 下测 GTK 窗口（没有 gi 或显示时跳过），`tests/web.test.js` 用 Playwright 测网页。
-- `scripts/`：仓库检查（`run_checks.py`、`check_repo.py`）、敏感扫描（`sensitive_scan.py`）、基准测试（`bench.py`）。
+- `tool_upgrade.py`：升级模块，walkwithedi/edi-lab 母版 `.github/upgrade/tool_upgrade.py` 的原样副本，本仓不修改，要改先改母版；`TOOL_UPGRADE_VERSION` 写明来源版本与副本的 SHA-256，`scripts/check_tool_upgrade.py`（`check_repo.py` 调用，CI 另与母版比对）检查。`upgrade-keep.txt`：升级时带到新版的文件清单（为空）。
+- `tests/`：unittest；`tests/test_gtk.py` 在 xvfb 下测 GTK 窗口（没有 gi 或显示时跳过），`tests/web.test.js` 与 `tests/upgrade.test.js`（升级、退回上一版）用 Playwright 测网页。
+- `scripts/`：仓库检查（`run_checks.py`、`check_repo.py`、`check_tool_upgrade.py`）、敏感扫描（`sensitive_scan.py`）、基准测试（`bench.py`）。
 
 ## 运行环境约束
 

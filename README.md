@@ -20,6 +20,8 @@ Type part of a name and every matching file under your home folder and local dis
 | `find_fast_core.py` | Index and search: scanning, cache, query language, inotify. |
 | `find_fast_gtk.py` | The GTK3 window. |
 | `find_fast_web.py`, `find_fast.html` | The browser page, used when python3-gi is missing. |
+| `tool_upgrade.py`, `TOOL_UPGRADE_VERSION` | The upgrade module (in-place upgrade and roll-back), an unchanged copy of a shared master; `TOOL_UPGRADE_VERSION` names its version. |
+| `upgrade-keep.txt` | Files an upgrade carries over, one relative path a line (empty: settings and the index live outside the folder). |
 | `tests/`, `scripts/`, `docs/` | Development only: tests, checks, benchmark, specification (not in the release zip). |
 
 ## Requirements
@@ -121,6 +123,23 @@ python3 find_fast.py QUERY...            print matching paths, newest first
 
 The exit code is 1 when nothing matches and 2 for an invalid query.
 
+## Upgrade
+
+Unpack the first release into a folder of your choice that you will keep (for example a Tools folder in your home folder) and send the launcher to the desktop from there, or run `install.sh`. Later releases replace that folder's contents in place, so the path never changes: desktop links, the menu entry `install.sh` wrote and the global show-or-hide shortcut (Ctrl+Alt+Space by default) keep working, and an installed copy needs no reinstall.
+
+1. Download the new release zip (or unpack it and use the `find-fast` folder inside).
+2. In the window, open Settings and choose Upgrade from a zip… or Upgrade from an unpacked folder…; on the browser page use Upgrade beside Quit, where a zip or a folder can be chosen, dropped or picked with the keyboard. The check shows current version → new version, the changes between the two from CHANGELOG.md, the files kept and any extra files; a downgrade or reinstall is called out.
+3. Choose Upgrade to vX.Y.Z. The status bar (or the page) shows each stage while the search box stays usable; then the window opens again on the new version, or the page reconnects to the service restarted on the same address.
+
+On the command line: `python3 find_fast.py --upgrade find-fast-vX.Y.Z.zip` shows the same check and asks (`--yes` skips the question).
+
+- Kept: the paths in `upgrade-keep.txt` (none: settings are in `~/.config/find-fast`, the index in `~/.cache/find-fast`, outside the tool folder, and are not touched).
+- Extra files: files in the tool folder that are neither on the keep list nor in the new release. They are listed first, are not deleted, and stay with the previous version.
+- Previous version: the old folder becomes the hidden `.find-fast.上一版` next to it; only one is kept. Roll back to previous version (Settings, the page, or `--rollback`) swaps the two; doing it again returns to the newer one.
+- Nothing changes, and the reason is shown, when the chosen item is not a find-fast release (its top folder is not `find-fast`), its version cannot be read, a program is missing, an entry has `..`, an absolute path, a symbolic link or a device file, it unpacks to more than 200 MB or 5000 entries, or the folder above the tool folder is not writable. A failure part-way restores the folder as it was.
+- The page writes an uploaded zip only to the system temporary folder and removes it afterwards; a chosen folder is zipped by the page first.
+- From a release without Upgrade (0.4.0 and earlier): unpack the new release elsewhere and run `python3 <unpacked folder>/tool_upgrade.py --tool-dir <tool folder> --upgrade find-fast-vX.Y.Z.zip`; later upgrades work as above.
+
 ## What is indexed, and settings
 
 By default the home folder and local disks mounted under `/media` and `/mnt`. Network mounts (nfs, cifs/smb, sshfs and other FUSE file systems except local ones such as ntfs-3g and exfat) and pseudo file systems such as `/proc` and `/sys` are skipped, and symbolic links to folders are not followed.
@@ -171,6 +190,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
+- 0.5.0: upgrade in place from a release zip or folder, in Settings, on the page and on the command line, keeping the previous version for roll-back.
 - 0.3.1: feedback address in the READMEs; no change to the tool.
 - 0.3.0: search words also match folder names in the path (can be turned off in Settings); result columns can be reordered by dragging or in Settings; default show-or-hide shortcut Ctrl+Alt+Space, written on install.
 - 0.2.0: hovering a result shows its full path; settings panel and exclusion from the context menu; similar versions marked; a locate button on every row and copy file; a more compact window that remembers its layout and fades while unfocused; the list folds away under an empty search box; shortcuts can be changed and a global show-or-hide shortcut set.

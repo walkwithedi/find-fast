@@ -22,6 +22,11 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+try:
+    import tool_upgrade
+except ImportError:     # without the upgrade module everything else still works
+    tool_upgrade = None
+
 import find_fast_core as core
 
 log = logging.getLogger('find_fast_web')
@@ -48,6 +53,9 @@ MESSAGES = {
         'choose_folder': '选择文件夹',
         'save_failed': '保存失败：{error}。请检查设置文件夹是否可写。',
         'cannot_exclude': '这个文件夹就是索引的文件夹，不能排除；请在「设置」里删除它。',
+        'no_upgrade': '缺少升级模块 tool_upgrade.py，请重新解压完整的工具目录',
+        'no_file': '没有收到文件',
+        'restart_failed': '升级后重新启动失败：端口已被占用。请重新双击「秒搜文件」。',
     },
     'en': {
         'no_gi': 'python3-gi (GTK 3) was not found, so the browser page is used. Install python3-gi for the window.',
@@ -61,6 +69,9 @@ MESSAGES = {
         'choose_folder': 'Choose a folder',
         'save_failed': 'Save failed: {error}. Check that the settings folder is writable.',
         'cannot_exclude': 'This is an indexed folder itself and cannot be excluded; remove it in Settings.',
+        'no_upgrade': 'The upgrade module tool_upgrade.py is missing; unpack the whole tool folder again',
+        'no_file': 'No file was received',
+        'restart_failed': 'Restarting after the upgrade failed: the port is taken. Double-click 秒搜文件.desktop again.',
     },
 }
 
@@ -136,6 +147,12 @@ class WebState:
         self.opener = open_path
         self.folder_opener = show_in_folder
         self.notice = None          # (message, kind) about the global shortcut, shown by the page once
+        main = ('find_fast.py', 'find_fast_core.py', 'find_fast_gtk.py', 'find_fast_web.py', 'find_fast.html')
+        self.upgrade = (tool_upgrade.WebJob(HERE, main, core.ui_language(), busy=self.is_applying)
+                        if tool_upgrade else None)
+
+    def upgrading(self):
+        return bool(self.upgrade and (self.upgrade.running or self.upgrade.restart.is_set()))
 
     def ping(self, page):
         with self.lock:
@@ -160,6 +177,8 @@ class WebState:
                     self.results.pop(page, None)
                     if not self.pages:
                         self.empty_since = now - BYE_GRACE
+            if self.upgrading():
+                return None
             if not self.seen:
                 return 'page never opened' if now - self.started > OPEN_TIMEOUT else None
             if not self.pages and self.empty_since is not None and now - self.empty_since >= BYE_GRACE:
@@ -371,6 +390,7 @@ class Handler(BaseHTTPRequestHandler):
             ok = isinstance(token, str) and hmac.compare_digest(token, st.token)
         if not ok:
             log.warning('rejected %s %s', self.command, urllib.parse.urlsplit(self.path).path)
+            self.close_connection = True    # a request body is not read; the connection cannot be reused
             self.send_json(403, {'error': msg('denied')})
         return ok
 
@@ -441,6 +461,13 @@ class Handler(BaseHTTPRequestHandler):
                                  'versions': st.versions_state(arg('page'), sid)})
         elif url.path == '/api/settings':
             self.send_json(200, st.settings())
+        elif url.path == '/api/upgrade':
+            if not st.upgrade:
+                self.send_json(404, {'error': msg('no_upgrade')})
+                return
+            out = st.upgrade.status()
+            out['version'] = core.VERSION
+            self.send_json(200, out)
         elif url.path == '/api/rows':
             try:
                 offset, limit = int(arg('offset', '0')), int(arg('limit', '100'))
@@ -467,6 +494,9 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {'ok': True})
             return
         if not self.allowed(True):
+            return
+        if url.path.startswith('/api/upgrade/'):
+            self.upgrade_post(url.path)     # the body may be a zip, not JSON
             return
         data = self.read_json()
         if url.path == '/api/ping':
@@ -533,8 +563,44 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {'error': msg('not_found')})
 
 
+    def upgrade_post(self, path):
+        job = self.state.upgrade
+        if not job:
+            self.send_json(404, {'error': msg('no_upgrade')})
+            return
+        if path == '/api/upgrade/check':
+            # the body is the zip itself (a folder is zipped by the page); it goes to the system temporary folder
+            try:
+                n = int(self.headers.get('Content-Length') or 0)
+            except ValueError:
+                n = 0
+            if n <= 0:
+                self.send_json(400, {'error': msg('no_file')})
+                return
+            code, obj = job.check_upload(self.rfile, n)
+            if code != 200:
+                self.close_connection = True    # the body may be partly unread
+            self.send_json(code, obj)
+        elif path == '/api/upgrade/apply':
+            code, obj = job.start_upgrade(self.read_json().get('id'))
+            log.info('upgrade requested: %s', code)
+            self.send_json(code, obj)
+        elif path == '/api/upgrade/rollback':
+            self.read_json()
+            code, obj = job.start_rollback()
+            log.info('rollback requested: %s', code)
+            self.send_json(code, obj)
+        else:
+            self.send_json(404, {'error': msg('not_found')})
+
+
 def watchdog(server, st, interval=1.0):
+    restart = st.upgrade.restart if st.upgrade else threading.Event()
     while not st.quit.wait(interval):
+        if restart.is_set():
+            time.sleep(0.5)     # let the page see that the upgrade finished
+            log.info('upgrade finished, restarting')
+            break
         reason = st.should_exit()
         if reason:
             log.info('%s, exiting', reason)
@@ -542,12 +608,34 @@ def watchdog(server, st, interval=1.0):
     server.shutdown()
 
 
-def make_server(index):
-    server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+def make_server(index, resume=None):
+    """A server on a random port with a new token; after an upgrade (resume) on the same port and
+    token, so the open page reconnects. Returns (None, None) when that port cannot be had again."""
+    if resume:
+        server = listen_again(int(resume.get('port') or 0))
+        token = str(resume.get('token') or '')
+        if server is None or not token:
+            return None, None
+    else:
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        token = secrets.token_urlsafe(24)
     server.daemon_threads = True
-    st = WebState(index, server.server_address[1], secrets.token_urlsafe(24))
+    st = WebState(index, server.server_address[1], token)
     Handler.state = st
     return server, st
+
+
+def listen_again(port, timeout=10):
+    end = time.monotonic() + timeout
+    while port:
+        try:
+            return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        except OSError as e:
+            if time.monotonic() >= end:
+                log.error('cannot listen on port %d again: %s', port, e)
+                return None
+            time.sleep(0.2)
+    return None
 
 
 def main(args=None):
@@ -556,7 +644,11 @@ def main(args=None):
         return 1
     config = core.Config(getattr(args, 'config', core.CONFIG_FILE))
     index = core.Index(config, getattr(args, 'cache', core.CACHE_FILE))
-    server, st = make_server(index)
+    resume = tool_upgrade.resumed() if tool_upgrade else None
+    server, st = make_server(index, resume)
+    if server is None:
+        tell_user(msg('restart_failed'))
+        return 1
     import find_fast_gtk        # the desktop shortcut code needs no GTK
     st.notice = find_fast_gtk.ensure_default_toggle(config)
     url = '%s/?t=%s' % (st.origin, st.token)
@@ -564,7 +656,7 @@ def main(args=None):
     print('find-fast: ' + url, flush=True)
     st.start_index()
     threading.Thread(target=watchdog, args=(server, st), daemon=True).start()
-    if not getattr(args, 'no_browser', False) and not webbrowser.open(url):
+    if not resume and not getattr(args, 'no_browser', False) and not webbrowser.open(url):
         tell_user(msg('no_browser', url=url))
     try:
         server.serve_forever(poll_interval=0.5)
@@ -573,7 +665,16 @@ def main(args=None):
     finally:
         server.server_close()
         st.close()
+        if st.upgrade:
+            st.upgrade.cleanup()
     log.info('server stopped')
+    if st.upgrade and st.upgrade.restart.is_set():
+        argv = ['--web', '--no-browser', '--log-level', logging.getLevelName(logging.getLogger().level)]
+        if getattr(args, 'config', core.CONFIG_FILE) != core.CONFIG_FILE:
+            argv += ['--config', args.config]
+        if getattr(args, 'cache', core.CACHE_FILE) != core.CACHE_FILE:
+            argv += ['--cache', args.cache]
+        tool_upgrade.restart(os.path.join(HERE, 'find_fast.py'), argv, {'port': st.port, 'token': st.token})
     return 0
 
 
