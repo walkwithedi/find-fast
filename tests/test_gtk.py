@@ -4,6 +4,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -156,6 +157,78 @@ class GtkTest(unittest.TestCase):
         w.on_entry_key(w.entry, key(Gdk.KEY_Escape))
         self.assertTrue(pump(until=lambda: self.quit_called))
 
+    def test_enter_right_after_typing_opens_the_new_result(self):
+        w = self.window()
+        self.type('notes')
+        opened = []
+        w.open_uri = opened.append
+        w.entry.set_text('report-2019')          # Enter before the search box's own delay has run
+        w.entry.emit('activate')
+        self.assertEqual(opened, [ui.file_uri(os.path.join(self.root, 'docs', 'old', 'report-2019.pdf'))])
+        searches = w.searches
+        pump(0.4)                                # the delayed search does not run it again
+        self.assertEqual(w.searches, searches)
+        self.assertEqual(w.cur, 0)
+
+    def test_list_keys_work_in_the_search_box(self):
+        w = self.window()
+        Gdk = ui.Gdk
+        self.type('notes')
+        located = []
+        w.show_in_file_manager = lambda p: located.append(p) or True
+        w.entry.set_text('report-2019')
+        self.assertTrue(w.on_entry_key(w.entry, key(Gdk.KEY_Return, Gdk.ModifierType.CONTROL_MASK)))
+        self.assertEqual(located, [os.path.join(self.root, 'docs', 'old', 'report-2019.pdf')])
+        w.entry.select_region(0, 0)
+        self.assertTrue(w.on_entry_key(w.entry, key(Gdk.KEY_C, Gdk.ModifierType.CONTROL_MASK
+                                                    | Gdk.ModifierType.SHIFT_MASK)))
+        pump(0.05)
+        self.assertEqual(ui.Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text(),
+                         os.path.join(self.root, 'docs', 'old', 'report-2019.pdf'))
+        w.entry.select_region(0, 3)               # selected text: Ctrl+C is the box's own copy
+        self.assertFalse(w.on_entry_key(w.entry, key(Gdk.KEY_c, Gdk.ModifierType.CONTROL_MASK)))
+
+    def test_escape_hides_when_a_global_shortcut_is_set(self):
+        w = self.window()
+        Gdk = ui.Gdk
+        w.apply_keys(dict(w.keys, toggle='<Primary><Alt>space'))
+        w.entry.set_text('report')
+        w.on_entry_key(w.entry, key(Gdk.KEY_Escape))
+        self.assertEqual(w.entry.get_text(), '')
+        self.assertTrue(w.win.get_visible())
+        w.on_entry_key(w.entry, key(Gdk.KEY_Escape))
+        pump(0.2)
+        self.assertFalse(w.win.get_visible())
+        self.assertFalse(self.quit_called)
+        self.assertFalse(w.stop.is_set())         # the index keeps updating while hidden
+
+    def test_rescan_says_whether_it_started(self):
+        w = self.window()
+        started = []
+        w.start_refresh = lambda: started.append(1)
+        w.rescan()
+        self.assertEqual(started, [1])
+        self.assertEqual(w.message[0], 'Rescan started')
+        self.assertEqual(w.hint.get_text(), 'Rescan started')     # folded: shown in the search box
+        busy = threading.Event()
+        w.worker = threading.Thread(target=busy.wait, daemon=True)
+        w.worker.start()
+        w.rescan()
+        self.assertEqual(w.message[0], 'A scan is running; try again later')
+        busy.set()
+        w.worker.join()
+
+    def test_menu_key_opens_the_menu_at_the_row(self):
+        w = self.window()
+        self.type('report')
+        w.cur = 1
+        w.fill()
+        pump(0.1)
+        w.popup_menu(None)
+        pump(0.1)
+        self.assertTrue(w.menu.get_visible())
+        w.menu.popdown()
+
     def test_tooltip_is_full_path(self):
         w = self.window()
         long_dir = os.path.join(self.root, 'deep', 'a folder & <more> ' + 'x' * 120)
@@ -231,6 +304,7 @@ class GtkTest(unittest.TestCase):
         self.assertTrue(s.problems.get_visible())
         self.assertFalse(s.anyway.get_visible())
         self.assertTrue(s.problems.get_text().startswith('Save failed'))
+        self.assertIs(s.problems.get_parent(), s.dialog.get_content_area())    # outside the scrolled part
         missing = os.path.join(self.tmp, 'not-there')
         s.add('roots', self.root)
         s.add('roots', missing)
@@ -252,10 +326,49 @@ class GtkTest(unittest.TestCase):
         pump(0.05)
         self.assertIsNone(w.settings)
 
+    def test_unsaved_settings_are_asked_about_before_an_upgrade(self):
+        w = self.window()
+        s = w.open_settings()
+        chosen, asked = [], []
+        s.choose_upgrade = lambda how: chosen.append(how)
+        w.confirm = lambda text, detail, ok, cb: (asked.append((text, ok)), cb(False))
+        s.upgrade('zip')
+        self.assertEqual((chosen, asked), (['zip'], []))          # nothing changed: no question
+        s.hidden.set_active(not s.hidden.get_active())
+        s.upgrade('zip')
+        self.assertEqual(asked, [('Settings have unsaved changes', 'Continue anyway')])
+        self.assertEqual(chosen, ['zip'])                          # cancelled
+        w.confirm = lambda text, detail, ok, cb: cb(True)
+        s.upgrade('dir')
+        self.assertEqual(chosen, ['zip', 'dir'])
+        s.dialog.destroy()
+
+    def test_long_confirmation_scrolls(self):
+        w = self.window()
+        w.confirm('Title', '\n'.join('line %d' % i for i in range(40)), 'OK', lambda ok: None)
+        pump(0.1)
+        sw = w.confirm_scroll
+        self.assertLessEqual(sw.get_allocated_height(), ui.CONFIRM_HEIGHT + 2)
+        sw.get_toplevel().destroy()
+
+    def test_version_tags_are_not_insensitive(self):
+        w = self.window()
+        self.assertTrue(w.tag_cell.get_property('sensitive'))
+        self.assertLess(w.tag_cell.get_property('foreground-rgba').alpha, 1)
+
+    def test_short_search_hint_beside_the_state_text(self):
+        w = self.window()
+        w.win.resize(260, 1)
+        self.assertTrue(pump(until=lambda: w.entry.get_placeholder_text() == 'Search...'))
+        self.assertIn('wildcards', w.entry.get_tooltip_text())
+        w.win.resize(1200, 1)
+        self.assertTrue(pump(until=lambda: 'wildcards' in w.entry.get_placeholder_text()))
+
     def test_context_menu_exclude(self):
         w = self.window()
         asked = []
-        w.confirm = lambda text, detail, ok, cb: (asked.append(text), cb(True))
+        details = []
+        w.confirm = lambda text, detail, ok, cb: (asked.append(text), details.append(detail), cb(True))
         self.type('report-2019')
         w.cur = 0
         w.popup_menu(None)
@@ -264,6 +377,7 @@ class GtkTest(unittest.TestCase):
         w.menu.popdown()
         w.exclude_current()
         self.assertEqual(asked, ['Exclude %s?' % os.path.join(self.root, 'docs', 'old')])
+        self.assertTrue(details[0].startswith('The folder and the 2 entries in it are removed'))
         self.wait_ready()
         self.assertIn(os.path.join(self.root, 'docs', 'old'),
                       [os.path.expanduser(e) for e in core.Config(os.path.join(self.tmp, 'config.json')).exclude])
@@ -714,6 +828,24 @@ class GtkTest(unittest.TestCase):
     def test_toggle_action_of_the_application(self):
         app = ui.build_app(self.index, 'en')
         self.assertIsNotNone(app.lookup_action('toggle'))
+
+    def test_open_without_a_program_for_the_file(self):
+        w = self.window()
+        self.type('notes')
+        GLib, Gio = ui.GLib, ui.Gio
+
+        def refuse(uri):
+            raise GLib.Error.new_literal(Gio.io_error_quark(), 'No application is registered',
+                                         int(Gio.IOErrorEnum.NOT_SUPPORTED))
+        w.open_uri = refuse
+        w.open_current()
+        self.assertTrue(w.message[0].startswith('Open failed: no program is set to open this kind of file.'))
+
+        def fail(uri):
+            raise OSError('broken')
+        w.open_uri = fail
+        w.open_current()
+        self.assertEqual(w.message[0], 'Open failed: broken. Try opening it from a file manager.')
 
     def test_open_missing_file(self):
         w = self.window()

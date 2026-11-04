@@ -82,6 +82,13 @@ STRINGS = {
         'app_name': '秒搜文件',
         'upgrade_missing': '升级失败：缺少 tool_upgrade.py。请重新解压完整的工具目录后重试。',
         'bad_regex': '正则表达式有误：{error}',
+        'bad_regex_at': '正则表达式有误：{reason}（第 {pos} 个字符）',
+        're_open_paren': '括号不成对，缺少「)」',
+        're_close_paren': '多了一个「)」',
+        're_bracket': '方括号不成对，缺少「]」',
+        're_repeat': '「*」「+」「?」「{{}}」前面缺少要重复的内容',
+        're_repeat_twice': '「*」「+」「?」「{{}}」不能连用',
+        're_escape': '无效的转义「\\{char}」',
         'no_cache': '还没有索引，正在首次建立……',
         'scan_progress': '正在建立索引：{dirs} 个文件夹，{files} 个条目',
         'scan_done': '索引已更新：{files} 个条目，用时 {seconds} 秒',
@@ -100,6 +107,13 @@ STRINGS = {
         'upgrade_missing': 'Upgrade failed: tool_upgrade.py is missing. Unpack the whole tool folder again and retry.',
         'app_name': 'find-fast',
         'bad_regex': 'Invalid regular expression: {error}',
+        'bad_regex_at': 'Invalid regular expression: {reason} (character {pos})',
+        're_open_paren': 'a "(" has no matching ")"',
+        're_close_paren': 'there is an extra ")"',
+        're_bracket': 'a "[" has no matching "]"',
+        're_repeat': '"*", "+", "?" or "{{}}" has nothing before it to repeat',
+        're_repeat_twice': '"*", "+", "?" and "{{}}" cannot follow one another',
+        're_escape': 'the escape "\\{char}" is not valid',
         'no_cache': 'No index yet; building it for the first time...',
         'scan_progress': 'Indexing: {dirs} folders, {files} entries',
         'scan_done': 'Index updated: {files} entries in {seconds} s',
@@ -1008,11 +1022,34 @@ class Clause:
 TOKEN_RE = re.compile(r'(?:[^\s"]+|"[^"]*")+')
 
 
+# messages of re.error that have a plain explanation, in the order they are tried
+_RE_REASONS = (
+    ('missing ), unterminated subpattern', 're_open_paren'),
+    ('unbalanced parenthesis', 're_close_paren'),
+    ('unterminated character set', 're_bracket'),
+    ('nothing to repeat', 're_repeat'),
+    ('multiple repeat', 're_repeat_twice'),
+    ('bad escape', 're_escape'),
+)
+
+
+def regex_error_text(e, lang=None):
+    """A re.error in plain words with the character it was found at; others as Python gives them."""
+    msg = getattr(e, 'msg', '') or str(e)
+    pos = getattr(e, 'pos', None)
+    for start, key in _RE_REASONS:
+        if msg.startswith(start) and pos is not None:
+            m = re.match(r'bad escape \\?(.)', msg)
+            reason = text(key, lang, char=m.group(1) if m else '')
+            return text('bad_regex_at', lang, reason=reason, pos=pos + 1)
+    return text('bad_regex', lang, error=e)
+
+
 def _compile(pattern, flags=re.IGNORECASE):
     try:
         return re.compile(pattern, flags)
     except re.error as e:
-        raise QueryError(text('bad_regex', error=e))
+        raise QueryError(regex_error_text(e))
 
 
 def _wild(s):
@@ -1690,6 +1727,23 @@ class Index:
         with self.lock:
             return self.base.n - self.tomb.count(1) + len(self.extra)
 
+    def count_under(self, path):
+        """Entries at path or inside it: what excluding the folder path removes from the index."""
+        prefix = path.rstrip('/') + '/'
+        with self.lock:
+            base, tomb, extra = self.base, self.tomb, self.extra
+        n = 0
+        for di, d in enumerate(base.dirs):
+            if d == path or d.startswith(prefix):
+                n += sum(1 for i in base.dir_entries(di) if not tomb[i])
+        n += sum(1 for e in extra if e.dir == path or e.dir.startswith(prefix))
+        parent, name = os.path.split(path.rstrip('/'))
+        di = base.dir_index().get(parent)
+        if di is not None and any(base.name(i) == name and not tomb[i] for i in base.dir_entries(di)):
+            n += 1
+        n += sum(1 for e in extra if e.dir == parent and e.name == name)
+        return n
+
     def status(self, lang=None):
         with self.lock:
             st = {'state': self.state, 'entries': self.count(), 'progress': list(self.progress),
@@ -1918,6 +1972,20 @@ VERSION_MARKS = [re.compile(p) for p in (
     _SEP + r'*\(?' + _VER + r'\)?$',                # x_v2, x第二版
     r'^\(?' + _VER + r'\)?' + _SEP + r'*',          # v2 x
 )]
+# among versions with the same modification time, a later draft word is the newer one
+DRAFT_RANKS = ((re.compile(r'终稿|定稿|最终版|最终稿|final'), 5), (re.compile(r'修订版|修改版'), 4),
+               (re.compile(r'三稿'), 3), (re.compile(r'二稿'), 2), (re.compile(r'初稿|draft'), 1))
+
+
+def draft_rank(name):
+    """How late a draft the name says it is: 0 without a draft word, 5 for a final one."""
+    s = unicodedata.normalize('NFKC', display(name)).lower()
+    for rx, rank in DRAFT_RANKS:
+        if rx.search(s):
+            return rank
+    return 0
+
+
 _BRACKETS = str.maketrans('[]【】{}《》<>〔〕', '()()()()()()')
 _IGNORED = re.compile(r'[\s()_\-.,、:：·~]+')
 _version_keys = {}
@@ -1969,7 +2037,7 @@ class VersionGroups:
         for members in keyed.values():
             if len(members) < 2:
                 continue
-            best = max(members, key=lambda m: (m[1], -len(os.path.join(m[2], m[3])), -m[0]))
+            best = max(members, key=lambda m: (m[1], draft_rank(m[3]), -len(os.path.join(m[2], m[3])), -m[0]))
             g = len(self.groups)
             self.groups.append((best[0], len(members)))
             for m in members:

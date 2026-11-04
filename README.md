@@ -43,7 +43,7 @@ The first start builds the index, with progress in the status bar; what has been
 
 The default is Ctrl+Alt+Space. `install.sh` writes it, so it opens the window before the tool was ever started; when the tool runs from an unpacked folder without installing, the first start writes it. It is written only when no shortcut was ever set: one changed or cleared later is left alone. When the desktop already uses Ctrl+Alt+Space, the desktop is not recognised, or writing fails, nothing is written, and the installer output and the status bar (the status line on the browser page) say why; set one in Settings then.
 
-Change it in the window under Settings → Shortcuts → Show or hide the window: click the button and press the keys. On saving it is written into the desktop's own custom shortcuts (Kylin UKUI or GNOME, through gsettings) and shows in the system settings; it runs `find-fast --toggle`, which hides the window when it is in front and otherwise brings it forward with the search text selected (starting it when it is not running). A hidden window keeps the index up to date; closing the window or a second Esc on an empty box quits. A combination the desktop already uses is named first, with Save anyway. Clearing it, or `bash install.sh --uninstall`, removes only the entry this tool wrote.
+Change it in the window under Settings → Shortcuts → Show or hide the window: click the button and press the keys. On saving it is written into the desktop's own custom shortcuts (Kylin UKUI or GNOME, through gsettings) and shows in the system settings; it runs `find-fast --toggle`, which hides the window when it is in front and otherwise brings it forward with the search text selected (starting it when it is not running). A hidden window keeps the index up to date; with this shortcut set, Esc on an empty search box hides the window too; the close button quits. A combination the desktop already uses is named first, with Save anyway. Clearing it, or `bash install.sh --uninstall`, removes only the entry this tool wrote.
 
 Without `install.sh` the shortcut points at the unpacked folder (`python3 <tool folder>/find_fast.py --toggle`) and must be set again after the folder moves. On other desktops, or without gsettings, nothing is written: the settings show the command, with Copy command, to add by hand:
 
@@ -73,19 +73,21 @@ Plain words match the whole path: `atlas 28` finds `~/Documents/Atlas/report 28.
 
 - Type to search; ↓ moves into the list and ↑ on the first row back to the box; typing in the list continues in the box.
 - ↑ ↓, Page Up, Page Down, Home, End select; Enter or a double click opens; Ctrl+Enter locates; Ctrl+C copies the file; Ctrl+Shift+C copies the path. These are the default keys; see "Global hotkey" above for changing them.
+- These keys also work in the search box: on the selected row, or the first row when none is selected; pressed right after typing they act on the new results. With text selected in the box, Ctrl+C and Ctrl+Shift+C copy that text.
 - Locate opens the containing folder in the file manager with the item selected (files and folders alike); where the file manager cannot select it, only the folder is opened and the status bar says so. The locate button at the end of every row locates that row.
 - Copy file puts the file or folder itself on the clipboard: pasting in a file manager gives the item, pasting in other programs its path. Only the window has it; the browser page's clipboard holds text only, so there Ctrl+C still copies the path.
-- Right click or the Menu key (Shift+F10): locate, open, copy file, copy path; after a separator Go to the newest version (on Newer exists rows), Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first and names the folder; the item is not shown when that folder is an indexed folder itself.
+- Right click or the Menu key (Shift+F10; the menu opens below the selected row): locate, open, copy file, copy path; after a separator Go to the newest version (on Newer exists rows), Exclude this folder (folder rows) or Exclude the containing folder (file rows), rescan. Excluding asks first, naming the folder and how many entries leave the index; the item is not shown when that folder is an indexed folder itself.
 - Click a column header to sort by name, path, size or modification time; click again to reverse. Newest first by default.
 - Drag a column header to move the name, path, size and modified columns; the locate column stays last. Settings → Column order does the same with Move up and Move down; Default order puts back name, path, size, modified.
 - Hovering a result row shows its full path.
 - Similar versions: several versions of one file (copies, copies saved with a date or version number, drafts and finals) form a group; the newest by modification time is tagged Newest before its name and the others Newer exists. Results are shown as usual, not folded. Hovering adds a line with the group size and the newest one; right-click a Newer exists row for Go to the newest version. The rules are under "Similar versions" below.
 - The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below.
 - Results can be dragged into other programs.
-- F5 rescans; Ctrl+, opens Settings; Ctrl+L goes to the search box; Esc clears the box (which folds the list), and a second Esc closes the window.
+- F5 rescans (the status bar says it started, or to try again later while a scan runs); Ctrl+, opens Settings; Ctrl+L goes to the search box.
+- Esc: in the list it goes back to the search box; with text in the box it clears it (which folds the list); in an empty box it hides the window when a global show-or-hide shortcut is set, and closes it otherwise.
 - While another program has the focus the window is 70 % opaque, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
 - Column widths, column order, window size, maximised state, position and sort are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults (a column order with a missing, extra or unknown column gives the default order); a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
-- With an empty search box only the search row shows and the window gets shorter where it is; the first character typed unfolds the result list to the height it last had unfolded, also when nothing matches (it then says No matches). Clearing the box, or Esc, folds it again. A maximised window does not fold. While folded, the right end of the search box shows "N items" or "Indexing 42%", and messages such as copy results or errors for a few seconds; hovering the box shows the full index state and the version.
+- With an empty search box only the search row shows and the window gets shorter where it is; the first character typed unfolds the result list to the height it last had unfolded, also when nothing matches (it then says No matches). Clearing the box, or Esc, folds it again. A maximised window does not fold. While folded, the right end of the search box shows "N items" or "Indexing 42%", and messages such as copy results or errors for a few seconds; hovering the box shows the full index state and the version. When the window is too narrow for the search hint beside that text, the box shows only "Search..." and the hint moves into the tooltip.
 - While the list shows, the status bar shows the number of results and the time taken on the left, and the number of entries, scan progress, unreadable folders, the update mode (live or periodic) and the version on the right.
 
 ### Similar versions
@@ -98,7 +100,7 @@ Only files are grouped, not folders, and only within the current result (across 
 - a version number: `v2`, `V2.1`, `ver3`, `第二版`;
 - a draft word: 初稿, 二稿, 三稿, 终稿, 定稿, 修订版, 修改版, 最终版, 最终稿, final, draft.
 
-A remainder shorter than 2 characters is not grouped. The newest in a group is the latest modification time, the shorter path on a tie. Results above 100,000 are not grouped and the status bar says so; from 5,000 up the grouping runs in the background and the tags appear when it is done.
+A remainder shorter than 2 characters is not grouped. The newest in a group is the latest modification time; on a tie the later draft word wins (终稿, 定稿, 最终版, 最终稿, final last, then 修订版, 修改版, then 三稿, 二稿, 初稿 and draft), then the shorter path. Results above 100,000 are not grouped and the status bar says so; from 5,000 up the grouping runs in the background and the tags appear when it is done.
 
 ### Browser page
 
@@ -190,6 +192,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
+- 0.6.0: window: Enter or a shortcut right after typing acts on the new results; locate and copy keys also work in the search box; Esc in an empty box hides the window when a show-or-hide shortcut is set; settings problems stay above the buttons, the upgrade report scrolls and unsaved settings are asked about before an upgrade; a bad regular expression and a missing program to open a file are explained; the exclude question gives the number of entries; similar versions with the same time are ranked by draft word.
 - 0.5.1: an upgrade gives the new files permissions that follow the umask.
 - 0.5.0: upgrade in place from a release zip or folder, in Settings, on the page and on the command line, keeping the previous version for roll-back.
 - 0.3.1: feedback address in the READMEs; no change to the tool.
