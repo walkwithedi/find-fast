@@ -37,6 +37,10 @@ RESCAN_EVERY = 300              # seconds between rescans when inotify cannot wa
 NOTICE_SECONDS = 30             # how long a start-up notice stays in the status bar
 CHANGE_THROTTLE = 1.0           # seconds between result refreshes caused by file changes
 WHEEL_ROWS = 3
+CONFIRM_LINES, CONFIRM_CHARS = 12, 600    # a confirmation text beyond these scrolls
+CONFIRM_HEIGHT = 360
+TAG_ALPHA = 0.6     # opacity of the version tags' text
+HINT_GAP = 80       # pixels kept free between the search hint and the state text: icons and margins
 
 UI = {
     'zh': {
@@ -55,7 +59,13 @@ UI = {
         'entries': '共 {entries} 个条目',
         'copied': '已复制路径：{path}',
         'copy_failed': '复制失败：剪贴板不可用。请在「路径」列选中后手动复制。',
-        'open_failed': '打开失败：{error}。请检查文件是否还在，或用文件管理器打开。',
+        'open_failed': '打开失败：{error}。请在文件管理器中打开试试。',
+        'open_no_app': '打开失败：没有找到能打开这类文件的程序。请在文件管理器中右键它，在「打开方式」里选一个程序。',
+        'rescan_started': '已开始重新扫描', 'rescan_busy': '正在扫描，稍后再试',
+        'search_short': '搜索……',
+        'unsaved_q': '设置里有未保存的修改',
+        'unsaved_detail': '完成后窗口会以新版重新打开，设置里这些修改不会保存。要保留，先点「取消」，保存设置后再操作。',
+        'unsaved_go': '仍然继续',
         'gone': '打开失败：文件已不存在。索引将在下次扫描时更新。',
         'unreadable': '{count} 个文件夹无法读取',
         'no_match': '没有找到', 'hint_entries': '共 {count} 项', 'hint_scanning': '索引中 {pct}%',
@@ -72,7 +82,7 @@ UI = {
         'choose_folder': '选择文件夹',
         'exclude_this': '排除此文件夹', 'exclude_parent': '排除所在文件夹',
         'exclude_q': '排除 {path}？', 'exclude_btn': '排除',
-        'exclude_detail': '这个文件夹及其中的全部条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
+        'exclude_detail': '这个文件夹及其中的 {count} 个条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
         'applying': '正在按新设置更新索引……', 'applied': '已按新设置更新索引',
         'save_failed': '保存失败：{error}。请检查设置文件夹是否可写。',
         'keys': '快捷键', 'key_none': '未设置', 'key_press': '请按组合键……（Esc 取消）', 'key_clear': '清除',
@@ -133,7 +143,15 @@ UI = {
         'entries': '{entries} entries',
         'copied': 'Path copied: {path}',
         'copy_failed': 'Copy failed: the clipboard is unavailable. Select the path and copy it by hand.',
-        'open_failed': 'Open failed: {error}. Check that the file still exists, or open it from a file manager.',
+        'open_failed': 'Open failed: {error}. Try opening it from a file manager.',
+        'open_no_app': 'Open failed: no program is set to open this kind of file. Right-click it in a file manager '
+                       'and choose a program under Open With.',
+        'rescan_started': 'Rescan started', 'rescan_busy': 'A scan is running; try again later',
+        'search_short': 'Search...',
+        'unsaved_q': 'Settings have unsaved changes',
+        'unsaved_detail': 'The window opens again with the new version afterwards and these changes are not saved. '
+                          'To keep them, choose Cancel, save the settings, then try again.',
+        'unsaved_go': 'Continue anyway',
         'gone': 'Open failed: the file no longer exists. The index is updated at the next scan.',
         'unreadable': '{count} folders unreadable',
         'no_match': 'No matches', 'hint_entries': '{count} items', 'hint_scanning': 'Indexing {pct}%',
@@ -150,7 +168,7 @@ UI = {
         'choose_folder': 'Choose a folder',
         'exclude_this': 'Exclude this folder', 'exclude_parent': 'Exclude the containing folder',
         'exclude_q': 'Exclude {path}?', 'exclude_btn': 'Exclude',
-        'exclude_detail': 'The folder and everything in it are removed from the index and no longer indexed. '
+        'exclude_detail': 'The folder and the {count} entries in it are removed from the index and no longer indexed. '
                           'Remove the rule under Excluded in Settings to undo this.',
         'applying': 'Updating the index for the new settings...', 'applied': 'Index updated for the new settings',
         'save_failed': 'Save failed: {error}. Check that the settings folder is writable.',
@@ -231,7 +249,8 @@ KEY_DEFAULTS = {
 }
 DEFAULT_TOGGLE = '<Primary><Alt>space'     # written into the desktop once when no global shortcut was ever set
 KEY_ORDER = ('toggle', 'locate', 'open', 'copy_file', 'copy_path', 'settings', 'rescan', 'focus')
-LIST_KEYS = ('locate', 'open', 'copy_file', 'copy_path')        # act on the selected row: list focus only
+LIST_KEYS = ('locate', 'open', 'copy_file', 'copy_path')        # act on the selected row (or the first one)
+COPY_KEYS = ('copy_file', 'copy_path')      # in the search box these leave selected text to the box
 FIXED_KEYS = {'up', 'down', 'left', 'right', 'return', 'kp_enter', 'escape', 'page_up', 'page_down',
               'home', 'end', 'tab', 'iso_left_tab'}
 _MOD_NAMES = {'primary': 'Primary', 'control': 'Primary', 'ctrl': 'Primary', 'ctl': 'Primary', 'shift': 'Shift',
@@ -703,6 +722,7 @@ class Window:
         self.entry.connect('search-changed', self.on_search_changed)
         self.entry.connect('key-press-event', self.on_entry_key)
         self.entry.connect('activate', lambda *_: self.open_current())
+        self.entry.connect('size-allocate', lambda *_: GLib.idle_add(self._hint_after_resize))
         # while the list is folded away, the index state shows at the right end of the search box
         over = Gtk.Overlay()
         over.add(self.entry)
@@ -766,10 +786,9 @@ class Window:
                 icon.set_padding(2, 1)
                 col.pack_start(icon, False)
                 col.add_attribute(icon, 'icon-name', 0)
-                tag = Gtk.CellRendererText()
+                tag = self.tag_cell = Gtk.CellRendererText()
                 tag.set_padding(2, 1)
-                tag.set_property('sensitive', False)       # the theme's secondary text
-                tag.set_property('scale', 0.85)
+                tag.set_property('scale', 0.85)         # dimmed by dim_tags: still read as plain text
                 col.pack_start(tag, False)
                 col.add_attribute(tag, 'text', COL_TAG)
                 col.set_expand(False)
@@ -786,6 +805,8 @@ class Window:
             self.columns[key] = col
         for key in list(self.ui_state.get('order', DATA_COLUMNS)) + ['locate']:
             tv.append_column(self.columns[key])
+        tv.connect('style-updated', lambda *_: self.dim_tags())
+        self.dim_tags()
         tv.connect('scroll-event', self.on_scroll)
         tv.connect('key-press-event', self.on_tree_key)
         tv.connect('button-press-event', self.on_button)
@@ -844,7 +865,7 @@ class Window:
         self.exclude_item.connect('activate', lambda *_: self.exclude_current())
         self.menu.append(self.exclude_item)
         item = Gtk.MenuItem(label=t(self.lang, 'rescan'))
-        item.connect('activate', lambda *_: self.start_refresh())
+        item.connect('activate', lambda *_: self.rescan())
         self.menu.append(item)
         self.menu.show_all()
         self.menu.connect('deactivate', lambda *_: GLib.idle_add(self.update_opacity))
@@ -913,6 +934,14 @@ class Window:
         self.start_refresh()
         return True
 
+    def rescan(self):
+        """Rescan asked for by the person (F5, the menu): say whether it started."""
+        if self.worker is not None and self.worker.is_alive():
+            self.show_message(t(self.lang, 'rescan_busy'), 'info')
+            return
+        self.start_refresh()
+        self.show_message(t(self.lang, 'rescan_started'), 'info')
+
     def start_refresh(self):
         if self.worker is not None and self.worker.is_alive():
             return
@@ -945,7 +974,7 @@ class Window:
             self.win.remove_accel_group(self.accel)
         self.accel = Gtk.AccelGroup()
         self.win.add_accel_group(self.accel)
-        calls = {'settings': self.open_settings, 'rescan': self.start_refresh, 'focus': self.entry.grab_focus}
+        calls = {'settings': self.open_settings, 'rescan': self.rescan, 'focus': self.entry.grab_focus}
         for action, call in calls.items():
             keyval, mods = Gtk.accelerator_parse(self.keys.get(action) or '')
             if keyval:
@@ -1077,14 +1106,29 @@ class Window:
             roots, exclude = core.tidy_scope(c.roots, c.exclude + [core.to_tilde(target)])
             self.apply_scope(c.with_scope(roots, exclude, c.hidden))
 
-        self.confirm(t(self.lang, 'exclude_q', path=shown), t(self.lang, 'exclude_detail'),
+        count = '{:,}'.format(self.index.count_under(target))
+        self.confirm(t(self.lang, 'exclude_q', path=shown), t(self.lang, 'exclude_detail', count=count),
                      t(self.lang, 'exclude_btn'), done)
 
     def confirm(self, text, detail, ok_label, callback):
         """Ask with a modal dialog; callback(True) when ok_label was chosen. Tests replace this."""
         d = Gtk.MessageDialog(transient_for=self.win, modal=True, message_type=Gtk.MessageType.QUESTION,
                               buttons=Gtk.ButtonsType.NONE, text=text)
-        d.format_secondary_text(detail)
+        if detail.count('\n') > CONFIRM_LINES or len(detail) > CONFIRM_CHARS:
+            # a long text (the upgrade report) scrolls instead of growing past the screen
+            lab = Gtk.Label(label=detail, xalign=0, yalign=0)
+            lab.set_line_wrap(True)
+            lab.set_selectable(True)
+            lab.set_max_width_chars(70)
+            sw = Gtk.ScrolledWindow()
+            sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            sw.set_propagate_natural_height(True)
+            sw.set_max_content_height(CONFIRM_HEIGHT)
+            sw.add(lab)
+            d.get_message_area().pack_start(sw, True, True, 0)
+            self.confirm_scroll = sw
+        else:
+            d.format_secondary_text(detail)
         d.add_button(t(self.lang, 'cancel'), Gtk.ResponseType.CANCEL)
         d.add_button(ok_label, Gtk.ResponseType.OK)
         d.set_default_response(Gtk.ResponseType.CANCEL)
@@ -1371,7 +1415,26 @@ class Window:
         else:
             text = self.hint_state()
         self.hint.set_text(text)
-        self.entry.set_tooltip_text(self.state.get_text() or None)
+        short = self.placeholder_short()
+        self.entry.set_placeholder_text(t(self.lang, 'search_short' if short else 'search'))
+        tip = self.state.get_text()
+        if short:
+            tip = t(self.lang, 'search') + ('\n' + tip if tip else '')
+        self.entry.set_tooltip_text(tip or None)
+
+    def placeholder_short(self):
+        """True when the whole search hint and the state text at its right would overlap."""
+        width = self.entry.get_allocated_width()
+        if width <= 1 or not self.hint.get_text():
+            return False
+        hint_w = self.entry.create_pango_layout(t(self.lang, 'search')).get_pixel_size()[0]
+        state_w = self.hint.create_pango_layout(self.hint.get_text()).get_pixel_size()[0]
+        return hint_w + state_w + HINT_GAP > width
+
+    def _hint_after_resize(self):
+        if not self.closed and not self.expanded:
+            self.update_hint()
+        return False
 
     def hint_state(self):
         st = self.index.status()
@@ -1430,8 +1493,27 @@ class Window:
     # ------------------------------------------------------------ search
 
     def on_search_changed(self, *_):
+        if self.result is not None and self.entry.get_text() == self.query:
+            return                      # searched already: an action ran the search before the delay ended
         self.pinned = None
         self.run_search()
+
+    def sync_search(self):
+        """Run the search now when the box holds text not searched yet, so that an action right
+        after typing works on the new result and not the previous one."""
+        if self.entry.get_text() != self.query or self.result is None:
+            self.pinned = None
+            self.run_search()
+
+    def target_row(self):
+        """The selected row for an action, else the first row; -1 without results."""
+        self.sync_search()
+        if 0 <= self.cur < self.count():
+            return self.cur
+        if self.count():
+            self.scroll_to(0)
+            return self.cur
+        return -1
 
     def run_search(self, keep=False):
         """Search for the entry text. keep: stay on the selected path and scroll position."""
@@ -1645,6 +1727,13 @@ class Window:
         self.filling = False
         self.fill()
 
+    def dim_tags(self):
+        """The version tags in the theme's text colour, faded: a set colour, not an insensitive
+        cell, so that screen readers do not call them unavailable."""
+        color = self.tree.get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        color.alpha *= TAG_ALPHA
+        self.tag_cell.set_property('foreground-rgba', color)
+
     def on_scroll(self, _tv, event):
         ok, dx, dy = event.get_scroll_deltas()
         if ok and dy:
@@ -1677,14 +1766,34 @@ class Window:
         if key == Gdk.KEY_Escape:
             if self.entry.get_text():
                 self.entry.set_text('')
+            elif self.keys.get('toggle'):
+                self.hide_window()          # the global shortcut brings it back at once
             else:
                 self.on_delete()
             return True
-        if key in (Gdk.KEY_Down, Gdk.KEY_Page_Down) and self.count():
-            self.tree.grab_focus()
-            self.scroll_to(max(self.cur, 0) if self.cur >= 0 else 0)
-            return True
+        if key in (Gdk.KEY_Down, Gdk.KEY_Page_Down):
+            self.sync_search()
+            if self.count():
+                self.tree.grab_focus()
+                self.scroll_to(max(self.cur, 0) if self.cur >= 0 else 0)
+                return True
+            return False
+        for action in LIST_KEYS:
+            if self.matches(event, action):
+                if action in COPY_KEYS and self.entry.get_selection_bounds():
+                    return False            # copy the text selected in the box
+                self.list_actions()[action]()
+                return True
         return False
+
+    def list_actions(self):
+        return {'locate': self.open_folder, 'open': self.open_current, 'copy_file': self.copy_file,
+                'copy_path': self.copy_path}
+
+    def hide_window(self):
+        """Hide instead of closing: the index stays in memory and up to date."""
+        self.save_ui_state()
+        self.win.hide()
 
     def on_tree_key(self, _tv, event):
         key = event.keyval
@@ -1704,8 +1813,7 @@ class Window:
         if key == Gdk.KEY_End:
             self.scroll_to(self.count() - 1)
             return True
-        actions = {'locate': self.open_folder, 'open': self.open_current, 'copy_file': self.copy_file,
-                   'copy_path': self.copy_path}
+        actions = self.list_actions()
         for action in LIST_KEYS:
             if self.matches(event, action):
                 actions[action]()
@@ -1757,6 +1865,16 @@ class Window:
         self.exclude_item.set_visible(target is not None)
         if event is not None:
             self.menu.popup_at_pointer(event)
+            return
+        rect = None
+        if self.top <= self.cur < self.top + len(self.store):
+            rect = self.tree.get_cell_area(Gtk.TreePath.new_from_indices([self.cur - self.top]),
+                                           self.columns['name'])
+        if rect is not None and rect.height > 0:
+            # below the selected row, at the left of its name (bin window coordinates)
+            rect.x, rect.width = rect.x + 24, 1
+            self.menu.popup_at_rect(self.tree.get_bin_window(), rect, Gdk.Gravity.SOUTH_WEST,
+                                    Gdk.Gravity.NORTH_WEST, None)
         else:
             self.menu.popup_at_widget(self.tree, Gdk.Gravity.CENTER, Gdk.Gravity.NORTH_WEST, None)
 
@@ -1776,32 +1894,35 @@ class Window:
         Gtk.show_uri_on_window(self.win, uri, Gtk.get_current_event_time())
 
     def open_current(self):
+        if self.target_row() < 0:
+            return
         path = self.current_path()
-        if path is None:
-            if self.count():
-                self.scroll_to(0)
-                path = self.current_path()
-            if path is None:
-                return
         if not os.path.lexists(path):
             self.show_message(t(self.lang, 'gone'), 'bad')
             return
         try:
             self.open_uri(file_uri(path))
         except Exception as e:  # GLib.Error and OSError alike
-            self.show_message(t(self.lang, 'open_failed', error=getattr(e, 'message', None) or e), 'bad')
+            self.show_message(self.open_error(e), 'bad')
 
     def open_folder(self):
         """Locate: show the item selected in the file manager, else open its folder."""
-        path = self.current_path()
-        if path is None:
+        if self.target_row() < 0:
             return
+        path = self.current_path()
         try:
             if not self.show_in_file_manager(path):
                 self.open_uri(file_uri(os.path.dirname(path)))
                 self.show_message(t(self.lang, 'located_folder'), 'info')
         except Exception as e:
-            self.show_message(t(self.lang, 'open_failed', error=getattr(e, 'message', None) or e), 'bad')
+            self.show_message(self.open_error(e), 'bad')
+
+    def open_error(self, e):
+        """The message for a failed open: no program for the file type has its own words."""
+        io = isinstance(e, GLib.Error) and e.domain == GLib.quark_to_string(Gio.io_error_quark())
+        if io and e.code == Gio.IOErrorEnum.NOT_SUPPORTED:
+            return t(self.lang, 'open_no_app')
+        return t(self.lang, 'open_failed', error=getattr(e, 'message', None) or e)
 
     def show_in_file_manager(self, path):
         """Ask the file manager to show the item selected (org.freedesktop.FileManager1)."""
@@ -1818,9 +1939,9 @@ class Window:
     def copy_file(self):
         """Put the selected file (or folder) itself on the clipboard: file managers paste the
         item, other programs get its path."""
-        path = self.current_path()
-        if path is None:
+        if self.target_row() < 0:
             return
+        path = self.current_path()
         if not os.path.lexists(path):
             self.show_message(t(self.lang, 'copy_gone'), 'bad')
             return
@@ -1855,9 +1976,9 @@ class Window:
             data.set_text(core.display(path), -1)
 
     def copy_path(self):
-        path = self.current_path()
-        if path is None:
+        if self.target_row() < 0:
             return
+        path = self.current_path()
         try:
             cb = Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD)
             cb.set_text(core.display(path), -1)
@@ -2052,10 +2173,13 @@ class SettingsDialog:
             self.upgrade_buttons.append(b)
         self.rollback_button = self.upgrade_buttons[2]
         area.pack_start(row, False, False, 0)
+        # problems sit right above the buttons, outside the scrolled part, so they are always in view
         self.problems = Gtk.Label(xalign=0)
         self.problems.set_line_wrap(True)
         self.problems.set_selectable(True)
-        area.pack_start(self.problems, False, False, 0)
+        for side in ('start', 'end', 'top'):
+            getattr(self.problems, 'set_margin_' + side)(10)
+        d.get_content_area().pack_start(self.problems, False, False, 0)
         self.refill_upgrade()
         self.refill()
         self.refill_columns()
@@ -2079,12 +2203,29 @@ class SettingsDialog:
         self.rollback_button.set_sensitive(info['available'] and not busy)
 
     def upgrade(self, how):
+        """Upgrade or roll back; unsaved changes here would be lost when the window restarts, so
+        that is asked first."""
+        if not self.dirty():
+            self._upgrade(how)
+            return
+        lang = self.lang
+        self.window.confirm(t(lang, 'unsaved_q'), t(lang, 'unsaved_detail'), t(lang, 'unsaved_go'),
+                            lambda ok: ok and self._upgrade(how))
+
+    def _upgrade(self, how):
         if how == 'rollback':
             self.window.ask_rollback()
             return
         path = self.choose_upgrade(how)
         if path:
             self.window.upgrade_from(path)
+
+    def dirty(self):
+        """True when the dialog holds changes not saved yet."""
+        c = self.config
+        return (core.tidy_scope(self.roots, self.exclude) != core.tidy_scope(c.roots, c.exclude)
+                or self.hidden.get_active() != c.hidden or self.match_path.get_active() != c.match_path()
+                or self.keys != load_keys(c) or list(self.order) != list(self.window.column_order()))
 
     def choose_upgrade(self, how):
         """A file chooser for the release zip or its unpacked folder; returns the path or None. Tests replace this."""

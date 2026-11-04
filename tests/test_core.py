@@ -2,6 +2,7 @@
 import array
 import itertools
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -240,8 +241,32 @@ class QueryTest(TempTree):
         with self.assertRaises(core.QueryError):
             self.idx.search('(', 'path', regex=True)
 
+    def test_regex_errors_in_plain_words(self):
+        def why(pattern, lang):
+            try:
+                re.compile(pattern)
+            except re.error as e:
+                return core.regex_error_text(e, lang)
+        self.assertEqual(why('(', 'zh'), '正则表达式有误：括号不成对，缺少「)」（第 1 个字符）')
+        self.assertEqual(why('a)', 'zh'), '正则表达式有误：多了一个「)」（第 2 个字符）')
+        self.assertEqual(why('[a', 'zh'), '正则表达式有误：方括号不成对，缺少「]」（第 1 个字符）')
+        self.assertEqual(why('*a', 'zh'), '正则表达式有误：「*」「+」「?」「{}」前面缺少要重复的内容（第 1 个字符）')
+        self.assertEqual(why('a**', 'zh'), '正则表达式有误：「*」「+」「?」「{}」不能连用（第 3 个字符）')
+        self.assertEqual(why(r'\q', 'zh'), '正则表达式有误：无效的转义「\\q」（第 1 个字符）')
+        self.assertEqual(why('(', 'en'), 'Invalid regular expression: a "(" has no matching ")" (character 1)')
+        self.assertTrue(why('(?P<x', 'zh').startswith('正则表达式有误：missing >'))    # others as Python says
+
     def test_chinese(self):
         self.assertEqual(self.q('报告'), ['pics/项目报告.pptx'])
+
+    def test_count_under(self):
+        docs = os.path.join(self.root, 'docs')
+        self.assertEqual(self.idx.count_under(docs), 6)       # docs, its 3 files, old and the file in it
+        self.assertEqual(self.idx.count_under(os.path.join(docs, 'old')), 2)
+        self.assertEqual(self.idx.count_under(os.path.join(self.root, 'nowhere')), 0)
+        touch(os.path.join(docs, 'old', 'new.txt'), b'', 1700009000)
+        self.idx.refresh()
+        self.assertEqual(self.idx.count_under(os.path.join(docs, 'old')), 3)
 
     def test_empty_query_lists_everything(self):
         self.assertEqual(len(self.q('')), 11)
@@ -531,6 +556,17 @@ class VersionTest(TempTree):
         res = idx.search('同时')
         g = core.VersionGroups(res)
         self.assertEqual(res.path(g.newest(0)), os.path.join(self.root, 'v', 'tie', '同时(1).txt'))
+
+    def test_same_time_later_draft_is_newest(self):
+        d = os.path.join(self.root, 'w')
+        touch(os.path.join(d, '计划.docx'), b'', 1700007000)
+        touch(os.path.join(d, 'x', '计划-初稿.docx'), b'', 1700007000)
+        touch(os.path.join(d, 'x', 'y', '计划终稿.docx'), b'', 1700007000)
+        res = self.index().search('计划')
+        g = core.VersionGroups(res)
+        self.assertEqual(res.path(g.newest(0)), os.path.join(d, 'x', 'y', '计划终稿.docx'))
+        self.assertEqual([core.draft_rank(n) for n in ('a终稿.doc', 'a 修订版.doc', 'a二稿.doc', 'a_Draft.doc', 'a.doc')],
+                         [5, 4, 2, 1, 0])
 
     def test_limit_and_stop(self):
         idx = self.make_versions()

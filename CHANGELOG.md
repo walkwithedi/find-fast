@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.0
+
+- Window: Enter, Locate, Copy file and Copy path pressed right after typing first finish the search the box was waiting to run, so they act on the new results and not the previous ones.
+- Window: the list shortcuts (Locate, Open, Copy file, Copy path) also work in the search box, on the selected row or the first one; with text selected in the box, the copy keys copy that text.
+- Window: Esc in an empty search box hides the window when a global show-or-hide shortcut is set (the index keeps updating) and closes it otherwise; the close button always quits.
+- Window: the Menu key and Shift+F10 open the context menu below the selected row. F5 and Rescan say Rescan started, or A scan is running; try again later.
+- Settings: problems found on saving or recording a shortcut show right above the buttons, outside the scrolled part. A long upgrade report scrolls inside its question. Before an upgrade or roll-back, unsaved changes in the dialog are asked about first (Continue anyway).
+- A bad regular expression is explained in words with the character it was found at (an unbalanced parenthesis or bracket, a repeat with nothing before it, repeats one after another, a bad escape); other errors keep Python's text. Also on the command line and the browser page.
+- Window: when no program is set to open a kind of file, the message says so and points to Open With in a file manager; other open failures no longer suggest checking the file still exists.
+- Window: the Exclude question gives the number of entries that leave the index (`Index.count_under`).
+- Similar versions with the same modification time: the later draft word is the newest (终稿, 定稿, 最终版, 最终稿, final; then 修订版, 修改版; then 三稿, 二稿, 初稿, draft; `DRAFT_RANKS`), then the shorter path. Also on the command line and the browser page.
+- Window: the Newest and Newer exists tags are drawn in a faded text colour instead of an insensitive cell, so screen readers do not call them unavailable. When the window is too narrow for the search hint beside the folded state text, the box shows a short hint and the full one moves into the tooltip.
+- walkwithedi/find-fast#23.
+
 ## 0.5.1
 
 - The upgrade module copy is version 1.1: files unpacked or copied by an upgrade get 755 or 644 by whether the owner may run them, less the bits the process umask clears (as unzip and cp do), instead of those modes unchanged; with the usual umask 022 nothing differs. TOOL_UPGRADE_VERSION names 1.1 and the new SHA-256.
