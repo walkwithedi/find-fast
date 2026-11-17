@@ -138,7 +138,7 @@ class WebState:
         self.started = time.monotonic()
         self.lock = threading.Lock()
         self.pages = {}             # page id -> last beat
-        self.results = {}           # page id -> (search id, Result, {'groups': VersionGroups or None})
+        self.results = {}           # page id -> (search id, Result, holder: groups, clauses, facets, view)
         self.seen = False
         self.empty_since = None
         self.quit = threading.Event()
@@ -294,22 +294,64 @@ class WebState:
         path = p.stdout.strip()
         return (path if p.returncode == 0 and path else None), True
 
-    def search(self, page, query, sort, desc, regex):
-        res = self.index.search(query, sort, desc, regex)
-        sid = secrets.token_hex(4)
-        holder = {'groups': None}
-        sync = len(res) <= VERSIONS_SYNC or len(res) > core.VERSION_GROUP_LIMIT
-        if sync:
-            holder['groups'] = core.VersionGroups(res)
+    def search(self, page, query, sort, desc, regex, type_='all', scope='', reuse_sid=''):
+        """(sid, Result, rows in the view). With reuse_sid naming this page's last search for the
+        same query and order, that result is kept and only the type and folder filters change,
+        so the similar-version marks and counts stay as they are."""
+        if type_ not in core.FILTER_KEYS:
+            type_ = 'all'
+        scope = scope or ''
+        key = (query, sort, desc, regex)
         with self.lock:
-            self.results[page] = (sid, res, holder)
-        if not sync:
-            def work():
-                g = core.VersionGroups(res, stop=lambda: self.results.get(page, (None,))[0] != sid)
-                if not g.skipped:
-                    holder['groups'] = g
-            threading.Thread(target=work, name='versions', daemon=True).start()
-        return sid, res
+            got = self.results.get(page)
+        if reuse_sid and got is not None and got[0] == reuse_sid and got[2].get('key') == key:
+            sid, res, holder = got
+        else:
+            res = self.index.search(query, sort, desc, regex)
+            sid = secrets.token_hex(4)
+            clauses = core.parse_query(query, regex, self.index.config.match_path())
+            holder = {'key': key, 'groups': None, 'clauses': clauses, 'facets': None, 'suggest': None, 'view': None}
+            sync = len(res) <= VERSIONS_SYNC or len(res) > core.VERSION_GROUP_LIMIT
+            if sync:
+                holder['groups'] = core.VersionGroups(res)
+            holder['facets'] = core.facets_of(res)
+            if len(res) <= core.FACETS_SYNC:
+                self._suggest(res, holder)
+            with self.lock:
+                self.results[page] = (sid, res, holder)
+            if not sync:
+                def work():
+                    g = core.VersionGroups(res, stop=lambda: self.results.get(page, (None,))[0] != sid)
+                    if not g.skipped:
+                        holder['groups'] = g
+                threading.Thread(target=work, name='versions', daemon=True).start()
+            if holder['suggest'] is None:
+                def suggest():
+                    self._suggest(res, holder, stop=lambda: self.results.get(page, (None,))[0] != sid)
+                threading.Thread(target=suggest, name='suggest', daemon=True).start()
+        view = core.build_view(res, type_, scope)
+        holder['view'] = view
+        return sid, res, len(res) if view is None else len(view)
+
+    @staticmethod
+    def _suggest(res, holder, stop=None):
+        """Folder suggestions for a result of more than SCOPE_SUGGEST_MIN rows."""
+        suggest = []
+        if len(res) > core.SCOPE_SUGGEST_MIN:
+            suggest = core.scope_suggest_of(res, stop=stop)
+            if suggest is None:
+                return
+        holder['suggest'] = [{'dir': core.display(d), 'dir_display': core.short_dir(core.display(d)), 'count': c}
+                             for d, c in suggest]
+
+    def facets(self, page, sid):
+        """(counts per type, folder suggestions) of a search; the suggestions are None while being
+        worked out in the background, so the page asks again."""
+        with self.lock:
+            got = self.results.get(page)
+        if got is None or got[0] != sid:
+            return None, None
+        return got[2]['facets'], got[2]['suggest']
 
     def versions_state(self, page, sid):
         """'ready', 'pending' or 'skipped' for the grouping of a search."""
@@ -323,20 +365,31 @@ class WebState:
         return 'too_many' if g.skipped else 'ready'
 
     def rows(self, page, sid, offset, limit):
+        """Rows offset.. of the current view of a search; 'k' is the row number in the whole result."""
         with self.lock:
             got = self.results.get(page)
         if got is None or got[0] != sid:
             return None
-        res, groups = got[1], got[2]['groups']
+        res, holder = got[1], got[2]
+        groups, view, clauses = holder['groups'], holder['view'], holder['clauses']
+        total = len(res) if view is None else len(view)
         roots = self.index.config.resolved_roots()
+        lang = core.ui_language()
+        now = time.time()
         out = []
-        for k in range(max(0, offset), min(len(res), offset + max(0, min(limit, ROWS_MAX)))):
+        for i in range(max(0, offset), min(total, offset + max(0, min(limit, ROWS_MAX)))):
+            k = i if view is None else view[i]
             name, folder, size, mtime = res.row(k)
             target = os.path.join(folder, name) if size < 0 else folder
-            out.append({'k': k, 'name': core.display(name), 'dir': core.display(folder),
+            shown_name, shown_dir = core.display(name), core.display(folder)
+            dir_display = core.short_dir(shown_dir)
+            name_html, dir_html = core.highlight_row(shown_name, dir_display, clauses)
+            out.append({'k': k, 'name': shown_name, 'name_html': name_html, 'dir': shown_dir,
+                        'dir_display': dir_display, 'dir_html': dir_html,
                         'path': core.display(os.path.join(folder, name)), 'size': size,
-                        'size_text': core.human_size(size), 'mtime': mtime, 'time': core.human_time(mtime),
-                        'folder': size < 0,
+                        'size_text': core.human_size(size), 'mtime': mtime,
+                        'time': core.human_time_short(mtime, now, lang), 'time_full': core.human_time(mtime),
+                        'folder': size < 0, 'cat': core.category(shown_name, size < 0),
                         'can_exclude': target not in roots and any(core.under(target, r) for r in roots)})
             mark = groups.mark(k) if groups is not None else None
             if mark:
@@ -442,13 +495,15 @@ class Handler(BaseHTTPRequestHandler):
             status['lang'] = core.ui_language()
             status['applying'] = st.is_applying()
             status['match_path'] = st.index.config.match_path()
+            status['folders'] = len(st.index.base.dirs)
             if st.notice:
                 status['notice'] = {'text': st.notice[0], 'kind': st.notice[1]}
             self.send_json(200, status)
         elif url.path == '/api/search':
             try:
-                sid, res = st.search(arg('page'), arg('q'), arg('sort', core.DEFAULT_SORT), arg('desc', '1') == '1',
-                                     arg('regex') == '1')
+                sid, res, count = st.search(arg('page'), arg('q'), arg('sort', core.DEFAULT_SORT),
+                                            arg('desc', '1') == '1', arg('regex') == '1', arg('type', 'all'),
+                                            arg('scope'), arg('sid'))
             except core.QueryError as e:
                 self.send_json(200, {'error': str(e), 'count': 0, 'rows': []})
                 return
@@ -456,9 +511,14 @@ class Handler(BaseHTTPRequestHandler):
                 limit = int(arg('limit', '100'))
             except ValueError:
                 limit = 100
-            self.send_json(200, {'sid': sid, 'count': len(res), 'ms': res.ms,
+            facets, suggest = st.facets(arg('page'), sid)
+            self.send_json(200, {'sid': sid, 'count': count, 'ms': res.ms, 'facets': facets,
+                                 'scope_suggest': suggest if not arg('scope') else [],
                                  'rows': st.rows(arg('page'), sid, 0, limit),
                                  'versions': st.versions_state(arg('page'), sid)})
+        elif url.path == '/api/facets':
+            facets, suggest = st.facets(arg('page'), arg('sid'))
+            self.send_json(200, {'facets': facets, 'scope_suggest': suggest})
         elif url.path == '/api/settings':
             self.send_json(200, st.settings())
         elif url.path == '/api/upgrade':

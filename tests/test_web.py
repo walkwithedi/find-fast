@@ -78,6 +78,7 @@ class WebTest(unittest.TestCase):
         self.assertEqual(code, 200)
         self.assertEqual(st['state'], 'ready')
         self.assertEqual(st['version'], core.VERSION)
+        self.assertGreater(st['folders'], 0)
         self.assertEqual(self.req('GET', '/nothing')[0], 404)
 
     def test_search_rows_and_errors(self):
@@ -92,6 +93,61 @@ class WebTest(unittest.TestCase):
         self.assertIn('error', j3)
         code, j4 = self.search('', limit=2)
         self.assertEqual((j4['count'], len(j4['rows'])), (11, 2))
+
+    def test_rows_carry_marks_short_folder_and_times(self):
+        code, j = self.search('report')
+        self.assertEqual(code, 200)
+        row = next(r for r in j['rows'] if r['name'] == 'Report 2024.pdf')
+        self.assertEqual(row['name_html'], '<mark>Report</mark> 2024.pdf')
+        self.assertEqual(row['dir_display'], core.short_dir(os.path.join(self.root, 'docs')))
+        self.assertEqual(row['dir_html'], row['dir_display'].replace('&', '&amp;'))
+        self.assertEqual(row['time'], core.human_time_short(row['mtime']))
+        self.assertEqual(row['time_full'], core.human_time(row['mtime']))
+        self.assertEqual(row['cat'], 'doc')
+        code, j = self.search('docs 2024')
+        row = j['rows'][0]
+        self.assertIn('<mark>2024</mark>', row['name_html'])
+        self.assertIn('<mark>docs</mark>', row['dir_html'])
+
+    def test_type_and_folder_filters_reuse_the_result(self):
+        code, j = self.search('report')
+        self.assertEqual(set(j['facets']), set(core.FILTER_KEYS))
+        self.assertEqual(j['facets']['all'], j['count'])
+        self.assertEqual(sum(v for k, v in j['facets'].items() if k != 'all'), j['facets']['all'])
+        self.assertEqual(j['scope_suggest'], [])
+        sid = j['sid']
+        code, d = self.search('report', type='doc', sid=sid)
+        self.assertEqual(d['sid'], sid)
+        self.assertEqual(d['count'], j['facets']['doc'])
+        self.assertTrue(all(r['cat'] == 'doc' for r in d['rows']))
+        self.assertEqual(d['facets'], j['facets'])
+        # rows of the view keep their number in the whole result
+        code, rows = self.req('GET', '/api/rows?' + urllib.parse.urlencode(dict(page='p1', sid=sid, offset=1, limit=5)))
+        self.assertEqual([r['k'] for r in rows['rows']], [r['k'] for r in d['rows'][1:6]])
+        code, f = self.search('report', scope=os.path.join(self.root, 'docs', 'old'), sid=sid)
+        self.assertEqual(f['sid'], sid)
+        self.assertEqual([r['name'] for r in f['rows']], ['report-2019.pdf'])
+        # an unknown type counts as all; another order searches again
+        code, a = self.search('report', type='nonsense', sid=sid)
+        self.assertEqual(a['count'], j['count'])
+        code, o = self.search('report', sid=sid, sort='name')
+        self.assertNotEqual(o['sid'], sid)
+        code, st = self.req('GET', '/api/facets?' + urllib.parse.urlencode(dict(page='p1', sid=o['sid'])))
+        self.assertEqual(st['facets'], o['facets'])
+
+    def test_folder_suggestions_for_large_results(self):
+        for i in range(core.SCOPE_SUGGEST_MIN + 10):
+            sub = 'many-a' if i % 3 else 'many-b'
+            os.makedirs(os.path.join(self.root, sub), exist_ok=True)
+            open(os.path.join(self.root, sub, 'item-%03d.txt' % i), 'w').close()
+        self.index.refresh()
+        code, j = self.search('item-')
+        self.assertEqual([s['dir'] for s in j['scope_suggest']],
+                         [os.path.join(self.root, 'many-a'), os.path.join(self.root, 'many-b')])
+        self.assertEqual(sum(s['count'] for s in j['scope_suggest']), j['count'])
+        code, f = self.search('item-', scope=j['scope_suggest'][1]['dir'], sid=j['sid'])
+        self.assertEqual(f['count'], j['scope_suggest'][1]['count'])
+        self.assertEqual(f['scope_suggest'], [])
 
     def test_open_only_result_rows(self):
         code, j = self.search('notes')

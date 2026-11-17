@@ -102,6 +102,92 @@ STRINGS = {
         'scope_network': '{item}：在网络挂载或系统伪文件系统上，不会被索引',
         'scope_nested': '{item}：包含在另一个索引的文件夹里，只按外层的算',
         'scope_outside': '{item}：不在任何索引的文件夹里，这条排除不起作用',
+        # interface of the window and the page (keys shared with find_fast.html)
+        'results_ms': '{count} 个结果 · {ms} 毫秒',
+        'scanning_short': '正在更新索引：{dirs} 个文件夹，{files} 个条目',
+        'entries': '共 {count} 项',
+        'ready': '就绪',
+        'end_note': '已显示全部 {count} 个结果',
+        'cat_all': '全部',
+        'cat_folder': '文件夹',
+        'cat_doc': '文档',
+        'cat_image': '图片',
+        'cat_archive': '压缩包',
+        'cat_code': '代码',
+        'cat_audio': '音视频',
+        'cat_other': '其他',
+        'sort_menu': '排序方式',
+        'sorts': ['最新在前', '最旧在前', '名称 A→Z', '名称 Z→A', '最大在前', '最小在前', '路径 A→Z'],
+        'scope_only': '只看 {dir}',
+        'scope_clear': '取消范围限制',
+        'pv_size': '大小',
+        'pv_modified': '修改时间',
+        'pv_type': '类型',
+        'pv_hit': '命中',
+        'pv_hit_name': '名称',
+        'pv_hit_path': '路径',
+        'pv_hit_both': '名称与路径',
+        'pv_kind_folder': '文件夹',
+        'pv_kind_file': '{ext} 文件',
+        'open': '打开',
+        'locate': '定位',
+        'copy_path': '复制路径',
+        'copy_file': '复制文件',
+        'rescan': '重新扫描',
+        'settings': '设置',
+        'clear': '清空搜索',
+        'theme': '切换外观',
+        'help': '快捷键与语法',
+        'more': '更多',
+        'menu_more': '更多',
+        'more_keys': '快捷键与语法',
+        'more_theme': '切换外观',
+        'more_fold': '收起为搜索框',
+        'more_upgrade': '升级',
+        'more_about': '关于',
+        'more_quit': '退出',
+        'empty_start_title': '找一个文件',
+        'empty_start_desc': '输入文件名，或文件名的一部分。词也可以落在文件夹名上。',
+        'empty_nomatch_title': '没有匹配「{q}」的结果',
+        'empty_nomatch_desc': '试试去掉类型筛选，或用一个更短的词。',
+        'empty_filtered_desc': '当前有类型筛选：{type}（{count}）',
+        'empty_loading': '正在载入索引……',
+        'btn_clear_search': '清除搜索',
+        'btn_show_syntax': '查看语法',
+        'btn_clear_filter': '取消筛选',
+        'keys_title': '快捷键与语法',
+        'keys_group_search': '搜索框',
+        'keys_group_list': '结果列表',
+        'keys_group_global': '全局',
+        'syn_title': '搜索语法',
+        'syn_multi': '多个词同时匹配，词可以落在文件名或上级文件夹名上',
+        'syn_or': '任一命中',
+        'syn_not': '排除',
+        'syn_glob': '通配整个文件名',
+        'syn_ext': '按扩展名，分号分隔',
+        'syn_path': '只在完整路径里匹配',
+        'syn_regex': '正则表达式',
+        'toast_opened': '已打开：{name}',
+        'toast_located': '已在文件管理器中打开所在文件夹',
+        'toast_copied_path': '已复制路径：{path}',
+        'toast_copied_file': '已复制文件：{name}',
+        'toast_excluded': '已排除：{dir}',
+        'toast_rescan_started': '已开始重新扫描',
+        'toast_rescan_busy': '正在扫描，稍后再试',
+        'aria_results': '搜索结果',
+        'aria_preview': '详情',
+        'aria_filter_type': '按类型筛选',
+        'aria_sort': '排序方式',
+        'pv_index_entries': '索引条目',
+        'pv_index_folders': '文件夹',
+        'pv_index_watch': '更新方式',
+        'time_now': '刚刚',
+        'time_min': '{n} 分钟前',
+        'time_hour': '{n} 小时前',
+        'time_day': '1 天前',
+        'time_days': '{n} 天前',
+        'copy_file_unavailable': '浏览器里无法复制文件，请使用桌面版，或改用「复制路径」。',
+        'hotkey_tip': '按 {accel} 显示或隐藏本窗口',
     },
     'en': {
         'upgrade_missing': 'Upgrade failed: tool_upgrade.py is missing. Unpack the whole tool folder again and retry.',
@@ -127,6 +213,92 @@ STRINGS = {
         'scope_network': '{item}: on a network mount or system pseudo file system, so it is not indexed',
         'scope_nested': '{item}: inside another indexed folder; only the outer one counts',
         'scope_outside': '{item}: not inside any indexed folder, so this exclusion has no effect',
+        # interface of the window and the page (keys shared with find_fast.html)
+        'results_ms': '{count} results · {ms} ms',
+        'scanning_short': 'Updating the index: {dirs} folders, {files} entries',
+        'entries': '{count} entries',
+        'ready': 'Ready',
+        'end_note': 'All {count} results shown',
+        'cat_all': 'All',
+        'cat_folder': 'Folders',
+        'cat_doc': 'Documents',
+        'cat_image': 'Images',
+        'cat_archive': 'Archives',
+        'cat_code': 'Code',
+        'cat_audio': 'Audio/Video',
+        'cat_other': 'Other',
+        'sort_menu': 'Sort by',
+        'sorts': ['Newest first', 'Oldest first', 'Name A→Z', 'Name Z→A', 'Largest first', 'Smallest first', 'Path A→Z'],
+        'scope_only': 'Only {dir}',
+        'scope_clear': 'Clear the folder limit',
+        'pv_size': 'Size',
+        'pv_modified': 'Modified',
+        'pv_type': 'Type',
+        'pv_hit': 'Matched',
+        'pv_hit_name': 'Name',
+        'pv_hit_path': 'Path',
+        'pv_hit_both': 'Name and path',
+        'pv_kind_folder': 'Folder',
+        'pv_kind_file': '{ext} file',
+        'open': 'Open',
+        'locate': 'Locate',
+        'copy_path': 'Copy path',
+        'copy_file': 'Copy file',
+        'rescan': 'Rescan',
+        'settings': 'Settings',
+        'clear': 'Clear the search',
+        'theme': 'Switch appearance',
+        'help': 'Shortcuts and syntax',
+        'more': 'More',
+        'menu_more': 'More',
+        'more_keys': 'Shortcuts and syntax',
+        'more_theme': 'Switch appearance',
+        'more_fold': 'Fold to a search box',
+        'more_upgrade': 'Upgrade',
+        'more_about': 'About',
+        'more_quit': 'Quit',
+        'empty_start_title': 'Find a file',
+        'empty_start_desc': 'Type a file name, or part of one. A word may also match a folder name above it.',
+        'empty_nomatch_title': 'Nothing matches "{q}"',
+        'empty_nomatch_desc': 'Try removing the type filter, or a shorter word.',
+        'empty_filtered_desc': 'Type filter is on: {type} ({count})',
+        'empty_loading': 'Loading the index...',
+        'btn_clear_search': 'Clear search',
+        'btn_show_syntax': 'Show syntax',
+        'btn_clear_filter': 'Clear the filter',
+        'keys_title': 'Shortcuts and syntax',
+        'keys_group_search': 'Search box',
+        'keys_group_list': 'Result list',
+        'keys_group_global': 'Global',
+        'syn_title': 'Search syntax',
+        'syn_multi': 'Words must all match, each in the name or in a folder name above it',
+        'syn_or': 'Either',
+        'syn_not': 'Not',
+        'syn_glob': 'Wildcard for the whole name',
+        'syn_ext': 'By extension, semicolon separated',
+        'syn_path': 'Match the whole path only',
+        'syn_regex': 'Regular expression',
+        'toast_opened': 'Opened: {name}',
+        'toast_located': 'Opened the containing folder',
+        'toast_copied_path': 'Path copied: {path}',
+        'toast_copied_file': 'File copied: {name}',
+        'toast_excluded': 'Excluded: {dir}',
+        'toast_rescan_started': 'Rescan started',
+        'toast_rescan_busy': 'A scan is running; try again later',
+        'aria_results': 'Search results',
+        'aria_preview': 'Details',
+        'aria_filter_type': 'Filter by type',
+        'aria_sort': 'Sort by',
+        'pv_index_entries': 'Entries',
+        'pv_index_folders': 'Folders',
+        'pv_index_watch': 'Updates',
+        'time_now': 'just now',
+        'time_min': '{n} min ago',
+        'time_hour': '{n} h ago',
+        'time_day': '1 day ago',
+        'time_days': '{n} days ago',
+        'copy_file_unavailable': 'Copying a file is not possible in the browser; use the desktop app or Copy path.',
+        'hotkey_tip': 'Press {accel} to show or hide this window',
     },
 }
 
@@ -2084,3 +2256,362 @@ def human_time(ts):
         return time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))
     except (OverflowError, OSError, ValueError):
         return ''
+
+
+# ---------------------------------------------------------------- result rows as shown
+
+CATEGORY_EXTS = {
+    'doc': ('pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'md', 'csv', 'rtf', 'odt', 'wps', 'et', 'dps'),
+    'image': ('png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'heic', 'ico'),
+    'archive': ('zip', 'tar', 'gz', '7z', 'rar', 'xz', 'bz2', 'iso'),
+    'code': ('py', 'js', 'ts', 'jsx', 'tsx', 'html', 'css', 'json', 'yml', 'yaml', 'sh', 'java', 'c', 'cpp', 'go',
+             'rs', 'toml', 'sql'),
+    'audio': ('mp3', 'wav', 'flac', 'ogg', 'm4a', 'aac'),
+    'video': ('mp4', 'mkv', 'mov', 'avi', 'webm', 'flv'),
+}
+EXT2CAT = {e: cat for cat, exts in CATEGORY_EXTS.items() for e in frozenset(exts)}
+# the type filters, in the order they are shown; 'all' first
+CATEGORY_KEYS = ('folder', 'doc', 'image', 'archive', 'code', 'audio', 'other')
+FILTER_KEYS = ('all',) + CATEGORY_KEYS
+SORT_CHOICES = (('mtime', True), ('mtime', False), ('name', False), ('name', True), ('size', True),
+                ('size', False), ('path', False))     # the sort menu, in the order of the 'sorts' labels
+SCOPE_SUGGEST_MIN = 400         # results above this get folder suggestions
+FACETS_SYNC = 200000            # results up to this size get folder suggestions before answering
+MARKS_MAX = 24                  # highlighted spans per text
+MARK_BG = '#ffe9a8'             # highlight colours for Pango markup (light theme; the dark one is passed in)
+
+
+def extension(name):
+    """Lower-case text after the last dot of a name, '' without one."""
+    dot = name.rfind('.')
+    return name[dot + 1:].lower() if dot > 0 else ''
+
+
+def category(name, is_folder=False):
+    """'folder', 'doc', 'image', 'archive', 'code', 'audio', 'video' or 'other'."""
+    if is_folder:
+        return 'folder'
+    return EXT2CAT.get(extension(name), 'other')
+
+
+def category_group(cat):
+    """The type filter a category is counted under: video goes with audio."""
+    return 'audio' if cat == 'video' else cat
+
+
+def sort_labels(lang=None):
+    table = STRINGS.get(lang or ui_language(), STRINGS['en'])
+    return list(table['sorts'])
+
+
+def short_dir(folder, keep=2, home=None):
+    """A folder as shown under a name: the home folder as ~, and when more than keep + 1 parts
+    remain, '…/' and the last keep of them."""
+    s = folder
+    home = HOME if home is None else home
+    if home and home != '/' and (s == home or s.startswith(home + '/')):
+        s = '~' + s[len(home):]
+    parts = s.split('/')
+    if len(parts) <= keep + 1:
+        return s
+    return '…/' + '/'.join(parts[-keep:])
+
+
+def human_time_short(ts, now=None, lang=None):
+    """'just now', 'N min ago', 'N h ago', 'N days ago' within a week; MM-DD in the same year,
+    else YYYY-MM-DD (also for times ahead of the clock by more than a minute)."""
+    now = time.time() if now is None else now
+    delta = now - ts
+    try:
+        when = time.localtime(ts)
+        this_year = time.localtime(now).tm_year
+    except (OverflowError, OSError, ValueError):
+        return ''
+    if -60 < delta < 60:
+        return text('time_now', lang)
+    if delta > 0:
+        if delta < 3600:
+            return text('time_min', lang, n=int(delta // 60))
+        if delta < 86400:
+            return text('time_hour', lang, n=int(delta // 3600))
+        days = int(delta // 86400)
+        if days < 7:
+            return text('time_day', lang) if days == 1 else text('time_days', lang, n=days)
+        if when.tm_year == this_year:
+            return time.strftime('%m-%d', when)
+    return time.strftime('%Y-%m-%d', when)
+
+
+def _escape_html(s):
+    return s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;')
+
+
+def _escape_pango(s):
+    return _escape_html(s).replace("'", '&#39;')
+
+
+def _substring_spans(text_, s):
+    if not s:
+        return []
+    return [(m.start(), m.end()) for m in re.finditer(re.escape(s), text_, re.IGNORECASE)]
+
+
+def _term_spans(text_, term):
+    """Character spans of text_ that term marks."""
+    kind = type(term)
+    if kind in (NameTerm, WordTerm) or (kind is PathTerm and term.rx is None):
+        return _substring_spans(text_, term.s)
+    if kind is AffixTerm:
+        head, tail = term.head, term.tail
+        low = text_.lower()
+        if len(low) != len(text_) or not term.match(low, ''):
+            return []
+        if head and tail:
+            return [(0, len(text_))]
+        if head:
+            return [(0, len(head))]
+        return [(len(text_) - len(tail), len(text_))] if tail else []
+    if kind is PatternTerm:
+        return [(m.start(), m.end()) for m in term.rx.finditer(text_) if m.end() > m.start()]
+    if kind is ExtTerm:
+        low = text_.lower()
+        for suf in term.suffixes:
+            if len(low) == len(text_) and low.endswith(suf) and len(suf) < len(text_):
+                return [(len(text_) - len(suf), len(text_))]
+        return []
+    return []
+
+
+def _merge(spans):
+    out = []
+    for a, b in sorted(spans):
+        if out and a <= out[-1][1]:
+            if b > out[-1][1]:
+                out[-1][1] = b
+        else:
+            out.append([a, b])
+    return out[:MARKS_MAX]
+
+
+def _positive_terms(clauses):
+    return [t for c in clauses or () if not c.negate for t in c.alts]
+
+
+def _render(text_, spans, mode, mark_bg, mark_fg):
+    esc = _escape_pango if mode == 'pango' else _escape_html
+    if not spans:
+        return esc(text_)
+    if mode == 'pango':
+        attrs = ' background="%s"' % (mark_bg or MARK_BG)
+        if mark_fg:
+            attrs += ' foreground="%s"' % mark_fg
+        open_, close = '<span%s>' % attrs, '</span>'
+    else:
+        open_, close = '<mark>', '</mark>'
+    out, pos = [], 0
+    for a, b in spans:
+        out.append(esc(text_[pos:a]))
+        out.append(open_ + esc(text_[a:b]) + close)
+        pos = b
+    out.append(esc(text_[pos:]))
+    return ''.join(out)
+
+
+def highlight(text_, clauses, mode='html', mark_bg=None, mark_fg=None):
+    """text_ escaped, with the places the positive terms of clauses (from parse_query) match
+    marked: <mark> for mode 'html', <span background=...> for mode 'pango'."""
+    if not text_ or not clauses:
+        return _render(text_ or '', [], mode, mark_bg, mark_fg)
+    spans = [s for t in _positive_terms(clauses) for s in _term_spans(text_, t)]
+    return _render(text_, _merge(spans), mode, mark_bg, mark_fg)
+
+
+def highlight_row(name, dir_display, clauses, mode='html', mark_bg=None, mark_fg=None):
+    """(name, folder) marked as by highlight; a term marked in the name is not marked again in
+    the folder."""
+    terms = _positive_terms(clauses)
+    name_spans, rest = [], []
+    for t in terms:
+        got = _term_spans(name, t) if name else []
+        if got:
+            name_spans.extend(got)
+        else:
+            rest.append(t)
+    dir_spans = [s for t in rest for s in _term_spans(dir_display, t)] if dir_display else []
+    return (_render(name or '', _merge(name_spans), mode, mark_bg, mark_fg),
+            _render(dir_display or '', _merge(dir_spans), mode, mark_bg, mark_fg))
+
+
+def row_category(name, size):
+    """Type filter key of a result row (size < 0 for a folder)."""
+    return category_group(category(name, size < 0))
+
+
+EXT2CAT_GROUP = {e: category_group(c) for e, c in EXT2CAT.items()}
+_CODE = {k: i for i, k in enumerate(CATEGORY_KEYS)}
+_EXT_CODE = {e: _CODE[c] for e, c in EXT2CAT_GROUP.items()}
+
+
+def _name_code(low, size):
+    if size < 0:
+        return _CODE['folder']
+    dot = low.rfind('.')
+    return _EXT_CODE.get(low[dot + 1:], _CODE['other']) if dot > 0 else _CODE['other']
+
+
+def base_codes(base):
+    """One byte per entry of a Base: its type filter as an index into CATEGORY_KEYS; worked out
+    once per Base (an index snapshot) and kept with it."""
+    codes = getattr(base, '_type_codes', None)
+    if codes is None:
+        codes = bytes(map(_name_code, base.low, base.sizes))
+        base._type_codes = codes
+    return codes
+
+
+def _rows_of(res):
+    """(codes, folder numbers) of every row of a Result, one per row, or None for other
+    objects with row() (tests). Overlay entries get folder number -1 - j."""
+    base = getattr(res, 'base', None)
+    if base is None:
+        return None
+    got = getattr(res, '_rows', None)
+    if got is not None:
+        return got
+    got = res._rows = _rows_of_base(res, base)
+    return got
+
+
+def _rows_of_base(res, base):
+    refs = res.refs
+    codes = base_codes(base)
+    if not res.extra or all(r >= 0 for r in refs):
+        refs = refs if isinstance(refs, (list, array.array)) else array.array('I', refs)
+        return bytes(map(codes.__getitem__, refs)), list(map(base.file_dir.__getitem__, refs))
+    extra = res.extra
+    out_codes, out_dirs = bytearray(), []
+    for r in refs:
+        if r >= 0:
+            out_codes.append(codes[r])
+            out_dirs.append(base.file_dir[r])
+        else:
+            e = extra[-1 - r]
+            out_codes.append(_name_code(e.low, e.size))
+            out_dirs.append(r)
+    return bytes(out_codes), out_dirs
+
+
+def _dir_path(res, d):
+    return res.base.dirs[d] if d >= 0 else res.extra[-1 - d].dir
+
+
+def facets_of(res, n=None, stop=None):
+    """Rows of a Result per type filter, with 'all'; None when stopped."""
+    n = len(res) if n is None else n
+    got = _rows_of(res)
+    if got is not None:
+        codes = got[0]
+        counts = {k: codes.count(bytes([i])) for i, k in enumerate(CATEGORY_KEYS)}
+        counts['all'] = n
+        return counts
+    counts = dict.fromkeys(CATEGORY_KEYS, 0)
+    row = res.row
+    for k in range(n):
+        if stop is not None and k % 4096 == 0 and stop():
+            return None
+        name, _folder, size, _mtime = row(k)
+        counts[row_category(name, size)] += 1
+    counts['all'] = n
+    return counts
+
+
+def in_scope(folder, name, size, scope):
+    """True when the row is inside folder scope or is that folder itself."""
+    if not scope:
+        return True
+    scope = scope.rstrip('/') or '/'
+    prefix = scope if scope == '/' else scope + '/'
+    return (folder == scope or folder.startswith(prefix)
+            or (size < 0 and os.path.join(folder, name) == scope))
+
+
+def build_view(res, type_='all', scope='', n=None):
+    """Rows of one type inside scope, in result order; None for all rows."""
+    if type_ not in FILTER_KEYS:
+        type_ = 'all'
+    if type_ == 'all' and not scope:
+        return None
+    n = len(res) if n is None else n
+    got = _rows_of(res)
+    if got is None:
+        out = []
+        row = res.row
+        for k in range(n):
+            name, folder, size, _mtime = row(k)
+            if type_ != 'all' and row_category(name, size) != type_:
+                continue
+            if scope and not in_scope(folder, name, size, scope):
+                continue
+            out.append(k)
+        return out
+    codes, dirs = got
+    masks = []
+    if type_ != 'all':
+        table = bytes(int(i == _CODE[type_]) for i in range(256))
+        masks.append(codes.translate(table))
+    if scope:
+        scope = scope.rstrip('/') or '/'
+        prefix = scope if scope == '/' else scope + '/'
+        parent = os.path.dirname(scope)
+        hit, check = {}, set()
+        for d in set(dirs):
+            path = _dir_path(res, d)
+            hit[d] = 1 if path == scope or path.startswith(prefix) else 0
+            if path == parent:
+                check.add(d)        # the folder entry of scope itself lives here
+        m = bytearray(map(hit.__getitem__, dirs))
+        if check:
+            for k in itertools.compress(range(n), map(check.__contains__, dirs)):
+                name, folder, size, _mtime = res.row(k)
+                if size < 0 and os.path.join(folder, name) == scope:
+                    m[k] = 1
+        masks.append(bytes(m))
+    mask = masks[0] if len(masks) == 1 else and_masks(n, masks)
+    return list(itertools.compress(range(n), mask))
+
+
+def scope_suggest_of(res, n=None, limit=2, stop=None):
+    """Up to limit folders that hold the most rows, as [(folder, count)], most first. Rows are
+    counted under the folder one level below the home folder, or two below the root elsewhere;
+    while one such folder holds every row, one level deeper. None when stopped."""
+    n = len(res) if n is None else n
+    got = _rows_of(res)
+    counts = {}
+    if got is not None:
+        for d, c in collections.Counter(got[1]).items():
+            path = _dir_path(res, d)
+            counts[path] = counts.get(path, 0) + c
+    else:
+        row = res.row
+        for k in range(n):
+            if stop is not None and k % 4096 == 0 and stop():
+                return None
+            folder = row(k)[1]
+            counts[folder] = counts.get(folder, 0) + 1
+    home = HOME.rstrip('/')
+    split = []
+    for folder, c in counts.items():
+        if home and (folder == home or folder.startswith(home + '/')):
+            base, parts, depth = home, [p for p in folder[len(home):].split('/') if p], 1
+        else:
+            base, parts, depth = '', [p for p in folder.split('/') if p], 2
+        split.append((base, parts, depth, c))
+    for extra in range(6):
+        grouped = {}
+        for base, parts, depth, c in split:
+            key = (base + '/' + '/'.join(parts[:depth + extra])) if parts else (base or '/')
+            grouped[key] = grouped.get(key, 0) + c
+        best = sorted(grouped.items(), key=lambda kv: (-kv[1], kv[0]))
+        if best and best[0][1] < n:
+            return best[:limit]
+    return []
