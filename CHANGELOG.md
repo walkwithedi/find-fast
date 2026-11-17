@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.0
+
+- Results: a row is the name over its folder (the home folder as `~`, a deep folder as `…/` and its last two levels), with the size over a short time at the right (just now, N min ago, N h ago, N days ago within a week, then the date; the full time is in the tooltip). Matches of the search words are marked in names and folders (`highlight`, `highlight_row`), worked out only for the rows shown; a word marked in the name is not marked again in the folder. Both the window and the browser page.
+- A details panel beside the list shows the selected row (name, type, full path with a copy button, size, time, where it matched) with Open, Locate, Copy path and, in the window, Copy file; without a row it shows the index. It hides below 960 pixels in the window and 1080 on the page. The button row above the list and the locate button on every row are removed.
+- A filter bar narrows a result by type (folders, documents, images, archives, code, audio/video, other) with counts over the whole result, and above 400 results by one of two suggested folders; neither searches again, so similar-version tags stay. Sorting moves into a menu at its right end. Column headers, column widths and the Column order setting are removed; widths and order remembered by earlier versions are ignored. The page's `/api/search` takes `type`, `scope` and `sid` and returns `facets`, `scope_suggest` and, per row, `name_html`, `dir_html`, `dir_display`, `time_full` and `cat`; `/api/facets` is new.
+- The status bar is the one place that counts results; a scan shows as a 2-pixel line under the search row. Empty states: a start hint with examples, no match (with Clear search, Show syntax, Clear the filter), and loading. A bad regular expression is explained under the search box and the last results stay.
+- ? in an empty search box opens Shortcuts and syntax; clicking an example searches it. The context menu is grouped (open and copy; exclude and versions; rescan) and shows the keys; Exclude is unavailable, with the reason, on an indexed folder itself. In the search box the arrow and page keys move the selection, and the first result is selected.
+- Settings come in four parts: Indexed folders, Exclusions, Search (default order, syntax, the window's shortcuts) and Upgrade; the page's Upgrade moved there and to the More menu.
+- Window: the folded window is 90 pixels high instead of as short as the desktop allows, and More → Fold to a search box folds it by hand; Switch appearance picks the theme's dark or light variant. The page has its own light and dark colours, kept in the browser, and does not scroll sideways at any width.
+- Counting types and building a filtered view use the index arrays: about 30 ms for a million results.
+
 ## 0.6.0
 
 - Window: Enter, Locate, Copy file and Copy path pressed right after typing first finish the search the box was waiting to run, so they act on the new results and not the previous ones.
