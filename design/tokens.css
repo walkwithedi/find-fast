@@ -1,0 +1,134 @@
+/* ============================================================================
+   秒搜文件 · 设计令牌 v1.0
+   ----------------------------------------------------------------------------
+   唯一的颜色 / 字号 / 间距 / 圆角 / 动效来源。组件样式只允许引用变量，不许写死值。
+   深色主题由 <html data-theme="dark"> 切换；首次运行跟随 prefers-color-scheme。
+   与 tokens.json 内容一致，改一侧必须同步另一侧。
+   ============================================================================ */
+
+:root{
+  /* —— 表面 —— */
+  --bg:#e9edf1;            /* 窗口外底（仅 GTK 窗口背景可见） */
+  --surface:#ffffff;       /* 主表面：列表、搜索框聚焦态 */
+  --surface-2:#f7f9fa;     /* 次表面：应用条、状态栏、详情面板、输入框默认 */
+  --surface-3:#eef1f4;     /* 三级：悬停底、按下的图标按钮 */
+
+  /* —— 状态底 —— */
+  --hover:#f4f7fa;         /* 行悬停 */
+  --sel:#eff4ff;           /* 选中行 */
+  --sel-line:#2f55d4;      /* 选中行左侧 3px 标记 */
+
+  /* —— 文字 —— */
+  --ink:#14181d;           /* 主文字：文件名、标题 */
+  --ink-2:#4b5563;         /* 次文字：路径、大小、正文 */
+  --ink-3:#66717e;         /* 弱文字：时间、说明、占位符 */
+
+  /* —— 线条 —— */
+  --line:#e5e9ed;          /* 分隔线 */
+  --line-2:#d3dae1;        /* 控件边框 */
+
+  /* —— 强调 —— */
+  --accent:#2f55d4;        /* 链接、选中图标、聚焦环 */
+  --accent-solid:#2f55d4;  /* 实心按钮底 */
+  --on-accent:#ffffff;     /* 实心按钮字 */
+  --accent-ink:#22409e;    /* 强调文字（在浅底上） */
+  --accent-soft:#ecf0fc;   /* 选中 chip 底、标签底 */
+
+  /* —— 语义 —— */
+  --ok:#0b6b4f;   --ok-soft:#e7f4ee;
+  --warn:#8a5a00;
+  --bad:#b3261e;
+
+  /* —— 命中高亮 —— */
+  --mark-bg:#ffe9a8;
+  --mark-fg:inherit;
+
+  /* —— 图标 —— */
+  --ico-folder:#9a6f16;
+
+  /* —— 字号 —— 只允许用这 7 档 */
+  --fs-micro:11px;     /* 角标、kbd */
+  --fs-meta:11.5px;    /* 时间、状态栏、chip 计数 */
+  --fs-label:12.5px;   /* 路径、chip、按钮、详情正文 */
+  --fs-body:13px;      /* 菜单、表单 */
+  --fs-title:14px;     /* 行文件名、详情标题 */
+  --fs-h:15px;         /* 空状态标题、对话框标题 */
+  --fs-field:15.5px;   /* 搜索框 */
+
+  /* —— 行高 —— */
+  --lh-tight:1.3;
+  --lh:1.45;
+  --lh-loose:1.7;
+
+  /* —— 间距 —— 2px 基数，只允许用这些 */
+  --sp-1:2px;  --sp-2:4px;  --sp-3:6px;  --sp-4:8px;  --sp-5:10px;
+  --sp-6:12px; --sp-7:14px; --sp-8:16px; --sp-10:24px; --sp-14:56px;
+
+  /* —— 圆角 —— */
+  --r-xs:4px; --r-sm:6px; --r:8px; --r-md:10px; --r-lg:12px; --r-full:999px;
+
+  /* —— 阴影 —— */
+  --shadow-1:0 1px 2px rgba(17,24,39,.06);
+  --shadow-2:0 12px 32px rgba(17,24,39,.14), 0 2px 8px rgba(17,24,39,.06);
+
+  /* —— 动效 —— */
+  --ease:cubic-bezier(.2,.7,.3,1);
+  --t-fast:100ms;
+  --t:140ms;
+  --t-slow:180ms;
+
+  /* —— 尺寸 —— */
+  --appbar-h:30px;
+  --field-h:44px;
+  --chip-h:28px;
+  --status-h:28px;
+  --row-h:48px;
+  --preview-w:340px;
+  --gutter:14px;
+}
+
+[data-theme="dark"]{
+  --bg:#0a0c0f;
+  --surface:#14181d;
+  --surface-2:#191e24;
+  --surface-3:#1f252c;
+
+  --hover:#1d232a;
+  --sel:#1b2436;
+  --sel-line:#8aa2ff;
+
+  --ink:#e8edf2;
+  --ink-2:#9aa6b3;
+  --ink-3:#7f8a97;
+
+  --line:#252b32;
+  --line-2:#333b44;
+
+  --accent:#8aa2ff;
+  --accent-solid:#4a67e8;
+  --on-accent:#ffffff;
+  --accent-ink:#b9c6ff;
+  --accent-soft:#1c2434;
+
+  --ok:#63d3a3;   --ok-soft:#12241d;
+  --warn:#e0b25c;
+  --bad:#ff8f86;
+
+  --mark-bg:rgba(255,201,80,.18);
+  --mark-fg:#ffd98a;
+
+  --ico-folder:#d9a94a;
+
+  --shadow-2:0 16px 40px rgba(0,0,0,.6), 0 2px 8px rgba(0,0,0,.4);
+}
+
+/* 降低动效偏好：只保留颜色变化，去掉位移与缩放 */
+@media (prefers-reduced-motion: reduce){
+  :root{ --t-fast:1ms; --t:1ms; --t-slow:1ms; }
+}
+
+/* 焦点环：唯一写法，不许各组件自定义 outline 颜色 */
+:where(button, [role="option"], input, select, a):focus-visible{
+  outline:2px solid var(--accent);
+  outline-offset:1px;
+}

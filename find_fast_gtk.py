@@ -694,6 +694,39 @@ class Window:
 
     # ------------------------------------------------------------ layout
 
+    def load_css(self, dark=None):
+        settings = Gtk.Settings.get_default()
+        if dark is None:
+            dark = self.index.config.other.get('theme', settings.get_property('gtk-application-prefer-dark-theme'))
+        self.dark = bool(dark)
+        settings.set_property('gtk-application-prefer-dark-theme', self.dark)
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, 'design', 'tokens.json'), encoding='utf-8') as f:
+            colors = json.load(f)['color']['dark' if self.dark else 'light']
+        self.ink3 = colors['ink-3']
+        self.mark_bg = '#3a3320' if self.dark else colors['mark-bg']
+        self.mark_fg = colors['mark-fg'] if self.dark else colors['ink']
+        with open(os.path.join(here, 'design', 'gtk.css'), encoding='utf-8') as f:
+            css = f.read()
+        aliases = {'surface2': 'surface-2', 'surface3': 'surface-3', 'ink2': 'ink-2',
+                   'ink3': 'ink-3', 'line2': 'line-2'}
+        def color(m):
+            key = aliases.get(m.group(1), m.group(1).replace('_', '-'))
+            return '@define-color %s %s;' % (m.group(1), colors[key])
+        css = re.sub(r'@define-color\s+(\w+)\s+[^;]+;', color, css)
+        if hasattr(self, 'css_provider'):
+            Gtk.StyleContext.remove_provider_for_screen(Gdk.Screen.get_default(), self.css_provider)
+        self.css_provider = Gtk.CssProvider()
+        self.css_provider.load_from_data(css.encode('utf-8'))
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), self.css_provider,
+                                               Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+
+    def switch_theme(self):
+        self.load_css(not self.dark)
+        self.index.config.other['theme'] = self.dark
+        self.save_config(self.index.config)
+        self.fill()
+
     def build(self):
         w = self.win = Gtk.ApplicationWindow(application=self.app)
         w.set_title(core.text('app_name', self.lang))
@@ -709,6 +742,8 @@ class Window:
         w.connect('window-state-event', self.on_window_state)
         w.connect('notify::is-active', lambda *_: GLib.idle_add(self.update_opacity))
         w.set_icon_name('system-search')
+        w.get_style_context().add_class('find-fast')
+        self.load_css()
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         w.add(box)
 
@@ -741,6 +776,10 @@ class Window:
         self.gear.get_accessible().set_name(t(self.lang, 'settings'))
         self.gear.connect('clicked', lambda *_: self.open_settings())
         top.pack_start(self.gear, False, False, 0)
+        theme = Gtk.Button.new_from_icon_name('weather-clear-night-symbolic', Gtk.IconSize.BUTTON)
+        theme.set_tooltip_text(core.text('theme', self.lang))
+        theme.connect('clicked', lambda *_: self.switch_theme())
+        top.pack_start(theme, False, False, 0)
         box.pack_start(top, False, False, 0)
         self.settings = None            # the open settings dialog
 
