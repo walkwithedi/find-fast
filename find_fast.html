@@ -1822,6 +1822,7 @@ function search(opts) {
     sid = j.sid; count = j.count; versions = j.versions; lastMs = j.ms;
     if (j.facets) { facets = j.facets; suggest = j.scope_suggest || []; }
     else if (!sameList) { facets = null; suggest = []; }
+    const suggestLater = j.scope_suggest === null && !scope;
     rows = [];
     $('rows').textContent = '';
     cur = -1;
@@ -1833,7 +1834,7 @@ function search(opts) {
     showCount();
     if (pendingNotice) { setStatus(pendingNotice.text, pendingNotice.kind, true); pendingNotice = null; }
     renderFilters(); renderEmpty();
-    if (!j.facets) pollFacets(my, 0);
+    if (!j.facets || suggestLater) pollFacets(my, 0);
     if (versions === 'pending') refreshMarks(my, 0);
     setFolded(false);
   }).catch(e => { if (my === seq && e.name !== 'AbortError') setStatus(L.search_failed(e.message), 'bad'); });
@@ -1849,7 +1850,7 @@ function pollFacets(my, tries) {
     if (my !== seq || !sid || tries > 60) return;
     api('/api/facets?' + new URLSearchParams({page: PAGE, sid: sid})).then(j => {
       if (my !== seq) return;
-      if (!j.facets) { pollFacets(my, tries + 1); return; }
+      if (!j.facets || j.scope_suggest === null) { pollFacets(my, tries + 1); return; }
       facets = j.facets; suggest = j.scope_suggest || [];
       renderFilters(); renderEmpty();
     }).catch(() => {});

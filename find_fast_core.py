@@ -2276,7 +2276,7 @@ FILTER_KEYS = ('all',) + CATEGORY_KEYS
 SORT_CHOICES = (('mtime', True), ('mtime', False), ('name', False), ('name', True), ('size', True),
                 ('size', False), ('path', False))     # the sort menu, in the order of the 'sorts' labels
 SCOPE_SUGGEST_MIN = 400         # results above this get folder suggestions
-FACETS_SYNC = 200000            # results up to this size are counted by type before answering
+FACETS_SYNC = 200000            # results up to this size get folder suggestions before answering
 MARKS_MAX = 24                  # highlighted spans per text
 MARK_BG = '#ffe9a8'             # highlight colours for Pango markup (light theme; the dark one is passed in)
 
@@ -2447,21 +2447,82 @@ def row_category(name, size):
     return category_group(category(name, size < 0))
 
 
+EXT2CAT_GROUP = {e: category_group(c) for e, c in EXT2CAT.items()}
+_CODE = {k: i for i, k in enumerate(CATEGORY_KEYS)}
+_EXT_CODE = {e: _CODE[c] for e, c in EXT2CAT_GROUP.items()}
+
+
+def _name_code(low, size):
+    if size < 0:
+        return _CODE['folder']
+    dot = low.rfind('.')
+    return _EXT_CODE.get(low[dot + 1:], _CODE['other']) if dot > 0 else _CODE['other']
+
+
+def base_codes(base):
+    """One byte per entry of a Base: its type filter as an index into CATEGORY_KEYS; worked out
+    once per Base (an index snapshot) and kept with it."""
+    codes = getattr(base, '_type_codes', None)
+    if codes is None:
+        codes = bytes(map(_name_code, base.low, base.sizes))
+        base._type_codes = codes
+    return codes
+
+
+def _rows_of(res):
+    """(codes, folder numbers) of every row of a Result, one per row, or None for other
+    objects with row() (tests). Overlay entries get folder number -1 - j."""
+    base = getattr(res, 'base', None)
+    if base is None:
+        return None
+    got = getattr(res, '_rows', None)
+    if got is not None:
+        return got
+    got = res._rows = _rows_of_base(res, base)
+    return got
+
+
+def _rows_of_base(res, base):
+    refs = res.refs
+    codes = base_codes(base)
+    if not res.extra or all(r >= 0 for r in refs):
+        refs = refs if isinstance(refs, (list, array.array)) else array.array('I', refs)
+        return bytes(map(codes.__getitem__, refs)), list(map(base.file_dir.__getitem__, refs))
+    extra = res.extra
+    out_codes, out_dirs = bytearray(), []
+    for r in refs:
+        if r >= 0:
+            out_codes.append(codes[r])
+            out_dirs.append(base.file_dir[r])
+        else:
+            e = extra[-1 - r]
+            out_codes.append(_name_code(e.low, e.size))
+            out_dirs.append(r)
+    return bytes(out_codes), out_dirs
+
+
+def _dir_path(res, d):
+    return res.base.dirs[d] if d >= 0 else res.extra[-1 - d].dir
+
+
 def facets_of(res, n=None, stop=None):
     """Rows of a Result per type filter, with 'all'; None when stopped."""
     n = len(res) if n is None else n
+    got = _rows_of(res)
+    if got is not None:
+        codes = got[0]
+        counts = {k: codes.count(bytes([i])) for i, k in enumerate(CATEGORY_KEYS)}
+        counts['all'] = n
+        return counts
     counts = dict.fromkeys(CATEGORY_KEYS, 0)
     row = res.row
     for k in range(n):
         if stop is not None and k % 4096 == 0 and stop():
             return None
         name, _folder, size, _mtime = row(k)
-        counts['folder' if size < 0 else EXT2CAT_GROUP.get(extension(name), 'other')] += 1
+        counts[row_category(name, size)] += 1
     counts['all'] = n
     return counts
-
-
-EXT2CAT_GROUP = {e: category_group(c) for e, c in EXT2CAT.items()}
 
 
 def in_scope(folder, name, size, scope):
@@ -2475,22 +2536,48 @@ def in_scope(folder, name, size, scope):
 
 
 def build_view(res, type_='all', scope='', n=None):
-    """Result rows of one type inside scope, in result order; None for all rows."""
+    """Rows of one type inside scope, in result order; None for all rows."""
     if type_ not in FILTER_KEYS:
         type_ = 'all'
     if type_ == 'all' and not scope:
         return None
     n = len(res) if n is None else n
-    out = []
-    row = res.row
-    for k in range(n):
-        name, folder, size, _mtime = row(k)
-        if type_ != 'all' and ('folder' if size < 0 else EXT2CAT_GROUP.get(extension(name), 'other')) != type_:
-            continue
-        if scope and not in_scope(folder, name, size, scope):
-            continue
-        out.append(k)
-    return out
+    got = _rows_of(res)
+    if got is None:
+        out = []
+        row = res.row
+        for k in range(n):
+            name, folder, size, _mtime = row(k)
+            if type_ != 'all' and row_category(name, size) != type_:
+                continue
+            if scope and not in_scope(folder, name, size, scope):
+                continue
+            out.append(k)
+        return out
+    codes, dirs = got
+    masks = []
+    if type_ != 'all':
+        table = bytes(int(i == _CODE[type_]) for i in range(256))
+        masks.append(codes.translate(table))
+    if scope:
+        scope = scope.rstrip('/') or '/'
+        prefix = scope if scope == '/' else scope + '/'
+        parent = os.path.dirname(scope)
+        hit, check = {}, set()
+        for d in set(dirs):
+            path = _dir_path(res, d)
+            hit[d] = 1 if path == scope or path.startswith(prefix) else 0
+            if path == parent:
+                check.add(d)        # the folder entry of scope itself lives here
+        m = bytearray(map(hit.__getitem__, dirs))
+        if check:
+            for k in itertools.compress(range(n), map(check.__contains__, dirs)):
+                name, folder, size, _mtime = res.row(k)
+                if size < 0 and os.path.join(folder, name) == scope:
+                    m[k] = 1
+        masks.append(bytes(m))
+    mask = masks[0] if len(masks) == 1 else and_masks(n, masks)
+    return list(itertools.compress(range(n), mask))
 
 
 def scope_suggest_of(res, n=None, limit=2, stop=None):
@@ -2498,13 +2585,19 @@ def scope_suggest_of(res, n=None, limit=2, stop=None):
     counted under the folder one level below the home folder, or two below the root elsewhere;
     while one such folder holds every row, one level deeper. None when stopped."""
     n = len(res) if n is None else n
+    got = _rows_of(res)
     counts = {}
-    row = res.row
-    for k in range(n):
-        if stop is not None and k % 4096 == 0 and stop():
-            return None
-        folder = row(k)[1]
-        counts[folder] = counts.get(folder, 0) + 1
+    if got is not None:
+        for d, c in collections.Counter(got[1]).items():
+            path = _dir_path(res, d)
+            counts[path] = counts.get(path, 0) + c
+    else:
+        row = res.row
+        for k in range(n):
+            if stop is not None and k % 4096 == 0 and stop():
+                return None
+            folder = row(k)[1]
+            counts[folder] = counts.get(folder, 0) + 1
     home = HOME.rstrip('/')
     split = []
     for folder, c in counts.items():

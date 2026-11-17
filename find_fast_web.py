@@ -314,8 +314,9 @@ class WebState:
             sync = len(res) <= VERSIONS_SYNC or len(res) > core.VERSION_GROUP_LIMIT
             if sync:
                 holder['groups'] = core.VersionGroups(res)
+            holder['facets'] = core.facets_of(res)
             if len(res) <= core.FACETS_SYNC:
-                self._count(res, holder)
+                self._suggest(res, holder)
             with self.lock:
                 self.results[page] = (sid, res, holder)
             if not sync:
@@ -324,29 +325,28 @@ class WebState:
                     if not g.skipped:
                         holder['groups'] = g
                 threading.Thread(target=work, name='versions', daemon=True).start()
-            if holder['facets'] is None:
-                def count():
-                    self._count(res, holder, stop=lambda: self.results.get(page, (None,))[0] != sid)
-                threading.Thread(target=count, name='facets', daemon=True).start()
+            if holder['suggest'] is None:
+                def suggest():
+                    self._suggest(res, holder, stop=lambda: self.results.get(page, (None,))[0] != sid)
+                threading.Thread(target=suggest, name='suggest', daemon=True).start()
         view = core.build_view(res, type_, scope)
         holder['view'] = view
         return sid, res, len(res) if view is None else len(view)
 
     @staticmethod
-    def _count(res, holder, stop=None):
-        """Counts per type over the whole result, and the folder suggestions for a large one."""
-        facets = core.facets_of(res, stop=stop)
-        if facets is None:
-            return
+    def _suggest(res, holder, stop=None):
+        """Folder suggestions for a result of more than SCOPE_SUGGEST_MIN rows."""
         suggest = []
-        if facets['all'] > core.SCOPE_SUGGEST_MIN:
-            suggest = core.scope_suggest_of(res, stop=stop) or []
+        if len(res) > core.SCOPE_SUGGEST_MIN:
+            suggest = core.scope_suggest_of(res, stop=stop)
+            if suggest is None:
+                return
         holder['suggest'] = [{'dir': core.display(d), 'dir_display': core.short_dir(core.display(d)), 'count': c}
                              for d, c in suggest]
-        holder['facets'] = facets
 
     def facets(self, page, sid):
-        """(facets, folder suggestions) of a search, (None, None) while they are being counted."""
+        """(counts per type, folder suggestions) of a search; the suggestions are None while being
+        worked out in the background, so the page asks again."""
         with self.lock:
             got = self.results.get(page)
         if got is None or got[0] != sid:

@@ -3,13 +3,17 @@
 
 The result list is virtual: a Gtk.TreeView whose ListStore holds only the rows that fit on
 screen, refilled from the search result as the separate scroll bar moves, so the number of
-results is not limited. Keyboard: type to search; Down moves into the list; Up/Down, Page
-Up/Down, Home/End move; Enter opens; Menu or Shift+F10 opens the context menu; Esc clears the
-search box, and when it is empty closes the window. Default shortcuts, changeable in Settings:
+results is not limited. A row shows the name over its folder (matches marked) with the size and
+time at the right; the details of the selected row and its actions are in a panel beside the
+list. Type filters and folder suggestions narrow a result without searching again. Keyboard:
+type to search; Down moves into the list; Up/Down, Page Up/Down, Home/End move; Enter opens;
+Menu or Shift+F10 opens the context menu; ? in an empty search box shows the shortcuts and the
+search syntax; Esc clears the search box, and when it is empty closes the window. Default shortcuts, changeable in Settings:
 Ctrl+Enter locates the item in the file manager; Ctrl+C copies the file itself, Ctrl+Shift+C its
 path; F5 rescans; Ctrl+, opens the settings; Ctrl+L goes to the search box. A global shortcut set
 in Settings runs `--toggle` through the desktop's custom shortcuts.
 """
+import bisect
 import json
 import logging
 import os
@@ -39,24 +43,19 @@ CHANGE_THROTTLE = 1.0           # seconds between result refreshes caused by fil
 WHEEL_ROWS = 3
 CONFIRM_LINES, CONFIRM_CHARS = 12, 600    # a confirmation text beyond these scrolls
 CONFIRM_HEIGHT = 360
-TAG_ALPHA = 0.6     # opacity of the version tags' text
 HINT_GAP = 80       # pixels kept free between the search hint and the state text: icons and margins
 
 UI = {
     'zh': {
-        'search': '搜索文件名或所在文件夹……（* ? 通配，ext:pdf，path:，!排除，a|b）',
-        'col_name': '名称', 'col_path': '路径', 'col_size': '大小', 'col_mtime': '修改时间',
+        'search': '搜索文件名或所在文件夹……（按 ? 查看语法）',
         'open': '打开', 'open_folder': '定位', 'copy_path': '复制路径', 'copy_file': '复制文件', 'rescan': '重新扫描',
-        'col_locate': '定位', 'locate_tip': '在文件管理器中打开所在文件夹并选中', 'locate_item': '定位 {name}',
+        'locate_tip': '在文件管理器中打开所在文件夹并选中',
         'located_folder': '已打开所在文件夹，文件管理器不支持自动选中',
         'copied_file': '已复制文件：{path}，可在文件管理器或其他程序中粘贴',
         'copy_gone': '复制失败：文件已不存在。请重新扫描后再试。',
         'loading': '正在载入索引……',
         'first_scan': '首次建立索引：{dirs} 个文件夹，{files} 个条目……',
         'scanning': '正在更新索引：{dirs} 个文件夹……',
-        'results': '{count} 个结果',
-        'results_ms': '{count} 个结果（{ms} 毫秒）',
-        'entries': '共 {entries} 个条目',
         'copied': '已复制路径：{path}',
         'copy_failed': '复制失败：剪贴板不可用。请在「路径」列选中后手动复制。',
         'open_failed': '打开失败：{error}。请在文件管理器中打开试试。',
@@ -68,12 +67,18 @@ UI = {
         'unsaved_go': '仍然继续',
         'gone': '打开失败：文件已不存在。索引将在下次扫描时更新。',
         'unreadable': '{count} 个文件夹无法读取',
-        'no_match': '没有找到', 'hint_entries': '共 {count} 项', 'hint_scanning': '索引中 {pct}%',
+        'hint_entries': '共 {count} 项', 'hint_scanning': '索引中 {pct}%',
         'hint_first': '索引中，已有 {count} 项',
         'ver_newest': '最新', 'ver_older': '有更新版', 'jump_newest': '跳到最新版',
         'ver_tip': '同组共 {count} 个类似版本，最新：{path}',
         'ver_skipped': '结果过多，未标出类似版本',
-        'settings': '设置', 'set_roots': '索引的文件夹', 'set_exclude': '排除',
+        'settings': '设置', 'set_roots': '索引的文件夹', 'set_exclude': '排除规则', 'set_search': '搜索',
+        'set_sort': '默认排序', 'set_syntax': '语法速查', 'more_unfold': '展开结果列表',
+        'about_text': '秒搜文件 {version}：全盘文件名搜索。', 'syn_names': '多个词同时匹配（只看文件名）',
+        'keys_select': '选择', 'keys_page': '翻页', 'keys_first_last': '首条 / 末条', 'keys_esc': '清空搜索 / 隐藏窗口',
+        'keys_menu': '右键菜单', 'keys_panel': '本面板', 'keys_back': '回到搜索框',
+        'exclude_root': '这是索引的文件夹本身，请在「设置」里删除它',
+        'index_tip': '输入文件名的一部分即可搜索；按 ? 查看快捷键与语法。',
         'set_exclude_hint': '名称规则，如 node_modules、*.tmp', 'set_hidden': '索引隐藏文件和文件夹',
         'add_folder': '添加文件夹……', 'add': '添加', 'remove': '删除', 'remove_item': '删除 {item}',
         'defaults': '恢复默认', 'cancel': '取消', 'save': '保存', 'save_anyway': '仍然保存',
@@ -82,7 +87,7 @@ UI = {
         'choose_folder': '选择文件夹',
         'exclude_this': '排除此文件夹', 'exclude_parent': '排除所在文件夹',
         'exclude_q': '排除 {path}？', 'exclude_btn': '排除',
-        'exclude_detail': '这个文件夹及其中的 {count} 个条目会从索引中移除，以后也不再索引。可在「设置」的「排除」里删除这条规则来恢复。',
+        'exclude_detail': '这个文件夹及其中的 {count} 个条目会从索引中移除，以后也不再索引。可在「设置」的「排除规则」里删除这条规则来恢复。',
         'applying': '正在按新设置更新索引……', 'applied': '已按新设置更新索引',
         'save_failed': '保存失败：{error}。请检查设置文件夹是否可写。',
         'keys': '快捷键', 'key_none': '未设置', 'key_press': '请按组合键……（Esc 取消）', 'key_clear': '清除',
@@ -100,8 +105,6 @@ UI = {
         'hotkey_written': '已写入系统快捷键：{key}', 'hotkey_removed': '已删除系统里的唤起快捷键',
         'hotkey_failed': '保存失败：写入系统快捷键时出错（{error}）。请在系统设置的自定义快捷键里手动添加，命令填：{command}',
         'set_match_path': '搜索词也匹配路径（所在文件夹的名称）',
-        'set_columns': '列顺序', 'col_up': '上移', 'col_down': '下移', 'col_up_item': '上移「{col}」',
-        'col_down_item': '下移「{col}」', 'col_defaults': '恢复默认顺序',
         'hotkey_default_set': '已设置唤起快捷键 {key}：随时按下即可打开或隐藏窗口，可在「设置」→「快捷键」里修改',
         'hotkey_default_taken': '设置默认唤起快捷键失败：{key} 已被桌面快捷键「{name}」占用。'
                                 '请在「设置」→「快捷键」→「唤起或隐藏窗口」里换一个组合键。',
@@ -127,20 +130,15 @@ UI = {
         'upgrade_missing': '升级模块 tool_upgrade.py 缺失，请重新解压完整的工具目录',
     },
     'en': {
-        'search': 'Search names and folders... (* ? wildcards, ext:pdf, path:, !not, a|b)',
-        'col_name': 'Name', 'col_path': 'Path', 'col_size': 'Size', 'col_mtime': 'Modified',
+        'search': 'Search names and folders... (press ? for the syntax)',
         'open': 'Open', 'open_folder': 'Locate', 'copy_path': 'Copy path', 'copy_file': 'Copy file', 'rescan': 'Rescan',
-        'col_locate': 'Locate', 'locate_tip': 'Open the containing folder in the file manager and select the item',
-        'locate_item': 'Locate {name}',
+        'locate_tip': 'Open the containing folder in the file manager and select the item',
         'located_folder': 'Opened the containing folder; the file manager cannot select the item',
         'copied_file': 'File copied: {path}; paste it in a file manager or another program',
         'copy_gone': 'Copy failed: the file no longer exists. Rescan and try again.',
         'loading': 'Loading the index...',
         'first_scan': 'Building the index: {dirs} folders, {files} entries...',
         'scanning': 'Updating the index: {dirs} folders...',
-        'results': '{count} results',
-        'results_ms': '{count} results ({ms} ms)',
-        'entries': '{entries} entries',
         'copied': 'Path copied: {path}',
         'copy_failed': 'Copy failed: the clipboard is unavailable. Select the path and copy it by hand.',
         'open_failed': 'Open failed: {error}. Try opening it from a file manager.',
@@ -154,12 +152,20 @@ UI = {
         'unsaved_go': 'Continue anyway',
         'gone': 'Open failed: the file no longer exists. The index is updated at the next scan.',
         'unreadable': '{count} folders unreadable',
-        'no_match': 'No matches', 'hint_entries': '{count} items', 'hint_scanning': 'Indexing {pct}%',
+        'hint_entries': '{count} items', 'hint_scanning': 'Indexing {pct}%',
         'hint_first': 'Indexing, {count} items so far',
         'ver_newest': 'Newest', 'ver_older': 'Newer exists', 'jump_newest': 'Go to the newest version',
         'ver_tip': '{count} similar versions; newest: {path}',
         'ver_skipped': 'Too many results to mark similar versions',
-        'settings': 'Settings', 'set_roots': 'Indexed folders', 'set_exclude': 'Excluded',
+        'settings': 'Settings', 'set_roots': 'Indexed folders', 'set_exclude': 'Exclusions', 'set_search': 'Search',
+        'set_sort': 'Default order', 'set_syntax': 'Syntax', 'more_unfold': 'Unfold the result list',
+        'about_text': 'find-fast {version}: file name search over the whole disk.',
+        'syn_names': 'Words must all match (names only)',
+        'keys_select': 'Select', 'keys_page': 'Page', 'keys_first_last': 'First / last',
+        'keys_esc': 'Clear the search / hide the window', 'keys_menu': 'Context menu', 'keys_panel': 'This panel',
+        'keys_back': 'Back to the search box',
+        'exclude_root': 'This is an indexed folder itself; remove it in Settings',
+        'index_tip': 'Type part of a file name to search; press ? for shortcuts and syntax.',
         'set_exclude_hint': 'Name rule, such as node_modules or *.tmp', 'set_hidden': 'Index hidden files and folders',
         'add_folder': 'Add folder...', 'add': 'Add', 'remove': 'Remove', 'remove_item': 'Remove {item}',
         'defaults': 'Restore defaults', 'cancel': 'Cancel', 'save': 'Save', 'save_anyway': 'Save anyway',
@@ -169,7 +175,7 @@ UI = {
         'exclude_this': 'Exclude this folder', 'exclude_parent': 'Exclude the containing folder',
         'exclude_q': 'Exclude {path}?', 'exclude_btn': 'Exclude',
         'exclude_detail': 'The folder and the {count} entries in it are removed from the index and no longer indexed. '
-                          'Remove the rule under Excluded in Settings to undo this.',
+                          'Remove the rule under Exclusions in Settings to undo this.',
         'applying': 'Updating the index for the new settings...', 'applied': 'Index updated for the new settings',
         'save_failed': 'Save failed: {error}. Check that the settings folder is writable.',
         'keys': 'Shortcuts', 'key_none': 'None', 'key_press': 'Press the keys... (Esc cancels)', 'key_clear': 'Clear',
@@ -192,8 +198,6 @@ UI = {
         'hotkey_failed': 'Save failed: the system shortcut could not be written ({error}). Add it by hand as a '
                          'custom shortcut in the system settings, with the command: {command}',
         'set_match_path': 'Search words also match the path (names of the folders above)',
-        'set_columns': 'Column order', 'col_up': 'Move up', 'col_down': 'Move down', 'col_up_item': 'Move {col} up',
-        'col_down_item': 'Move {col} down', 'col_defaults': 'Default order',
         'hotkey_default_set': 'Show-or-hide shortcut set to {key}: press it anywhere to open or hide the window; '
                               'change it under Settings > Shortcuts',
         'hotkey_default_taken': 'Setting the default show-or-hide shortcut failed: {key} is already a desktop '
@@ -223,18 +227,46 @@ UI = {
         'upgrade_missing': 'The upgrade module tool_upgrade.py is missing; unpack the whole tool folder again',
     },
 }
-COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime'),
-           ('locate', 'col_locate')]
 # clipboard formats offered by "copy file": file managers paste the file, other programs the path
 COPY_FILE_TARGETS = ('x-special/gnome-copied-files', 'text/uri-list', 'UTF8_STRING', 'text/plain;charset=utf-8',
                      'text/plain', 'TEXT', 'STRING')
-LOCATE_ICONS = ('find-location-symbolic', 'edit-find-symbolic', 'folder-open-symbolic', 'folder')
 UNFOCUSED_OPACITY = 0.7         # window opacity while another program has the focus (needs a compositor)
-COLUMN_WIDTHS = {'name': 300, 'path': 380, 'size': 90, 'mtime': 140, 'locate': 36}
-DATA_COLUMNS = ('name', 'path', 'size', 'mtime')   # default order; the locate column always comes last
-MIN_COLUMN_WIDTH = 24
-DEFAULT_SIZE = (960, 600)
+DEFAULT_SIZE = (1080, 640)
 EXPANDED_MIN = 150              # a smaller window height is not remembered as the unfolded height
+FOLDED_HEIGHT = 90              # the window under an empty search box: the search row alone
+MIN_WIDTH = 480
+PREVIEW_MIN_WIDTH = 960         # narrower windows hide the details panel
+PREVIEW_WIDTH = 340
+HINTS_MIN_WIDTH = 860           # narrower windows hide the key hints of the status bar
+ROW_HEIGHT = 48                 # a result row: the name over its folder
+META_WIDTH = 116                # the size and time at the right of a row
+PULSE_MS = 100                  # the scan progress line moves this often
+# theme icons by type; the first one the icon theme has is used
+TYPE_ICONS = {
+    'folder': ('folder',), 'doc': ('x-office-document', 'text-x-generic'), 'image': ('image-x-generic',),
+    'archive': ('package-x-generic', 'application-x-archive'), 'code': ('text-x-script', 'text-x-generic'),
+    'audio': ('audio-x-generic',), 'video': ('video-x-generic',), 'other': ('text-x-generic',),
+}
+# highlight colours in Pango markup (no theme colour can be named there): light and dark themes
+MARKS = {'light': ('#ffe9a8', '#14181d'), 'dark': ('#3a3320', '#ffd98a')}
+# sizes and spacing only; every colour is the theme's own
+CSS = b"""
+entry.ff-search { min-height: 40px; font-size: 115%; }
+progressbar.ff-scan, progressbar.ff-scan trough, progressbar.ff-scan progress {
+  min-height: 2px; min-width: 2px; border: none; border-radius: 0; padding: 0; margin: 0;
+}
+progressbar.ff-scan trough { background-image: none; background-color: transparent; box-shadow: none; }
+button.ff-chip { min-height: 24px; padding: 0 8px; }
+button.ff-chip label.ff-n { opacity: 0.65; }
+.ff-preview { padding: 14px 16px; }
+.ff-preview-name { font-weight: bold; }
+.ff-statusbar { min-height: 26px; border-top: 1px solid alpha(currentColor, 0.15); padding: 0 8px; }
+label.ff-dot { color: @success_color; }
+label.ff-dot.warning { color: @warning_color; }
+label.ff-dot.error { color: @error_color; }
+.ff-empty-title { font-weight: bold; font-size: 115%; }
+.ff-qerror { color: @error_color; }
+"""
 
 
 # ---------------------------------------------------------------- shortcuts
@@ -486,12 +518,6 @@ def toggle_command(here=None, home=None):
     return 'python3 ' + shlex.quote(os.path.join(here, 'find_fast.py')) + ' --toggle', False
 
 
-def valid_order(order):
-    """True for a list holding each data column once."""
-    return (isinstance(order, list) and len(order) == len(DATA_COLUMNS)
-            and all(isinstance(k, str) for k in order) and sorted(order) == sorted(DATA_COLUMNS))
-
-
 def accel_text(accel):
     """A readable form of an accelerator name without GTK, such as Ctrl+Alt+Space."""
     c = canonical_accel(accel)
@@ -556,7 +582,7 @@ def _save_quietly(config):
 
 
 def load_ui_state(path):
-    """Interface state remembered between runs (column widths, window size, position, sort).
+    """Interface state remembered between runs (window size, position, sort, dark theme).
     Missing or bad values are left out, so the defaults apply to them."""
     try:
         with open(path, encoding='utf-8') as f:
@@ -584,7 +610,7 @@ def load_ui_state(path):
         num(key, 100, 20000)
     for key in ('x', 'y'):
         num(key, -100000, 100000)
-    for key in ('maximized', 'desc'):
+    for key in ('maximized', 'desc', 'dark'):
         if key in data:
             if isinstance(data[key], bool):
                 out[key] = data[key]
@@ -595,26 +621,14 @@ def load_ui_state(path):
             out['sort'] = data['sort']
         else:
             bad.append('sort')
-    cols = data.get('columns')
-    if isinstance(cols, dict):
-        out['columns'] = {}
-        for k, v in cols.items():
-            if k in COLUMN_WIDTHS and isinstance(v, int) and not isinstance(v, bool) and 0 < v <= 20000:
-                out['columns'][k] = max(MIN_COLUMN_WIDTH, v)
-            else:
-                bad.append('columns.' + str(k))
-    elif cols is not None:
-        bad.append('columns')
-    if 'order' in data:
-        if valid_order(data['order']):
-            out['order'] = list(data['order'])
-        else:
-            bad.append('order')
+    # 'columns' and 'order' of earlier versions (widths and order of table columns) are left out
     if bad:
         log.warning('%s: ignoring bad values for %s', path, ', '.join(bad))
     return out
 COL_TIP = 5                     # store column holding the row's tooltip
 COL_TAG = 6                     # store column holding the similar-version tag
+COL_MAIN = 7                    # store column holding the name over the folder (Pango markup)
+COL_META = 8                    # store column holding the size over the time (Pango markup)
 VERSIONS_SYNC = 5000            # results up to this size are grouped at once, larger ones in the background
 DEFAULT_DESC = {'name': False, 'path': False, 'size': True, 'mtime': True}
 
@@ -652,9 +666,31 @@ def file_uri(path):
 
 
 def t(_lang, _name, **kw):
-    """Interface text _name in language _lang, with {placeholders} filled from kw."""
+    """Interface text _name in language _lang, with {placeholders} filled from kw; texts shared
+    with the browser page come from find_fast_core."""
     table = UI.get(_lang, UI['en'])
-    return table.get(_name, UI['en'][_name]).format(**kw)
+    if _name not in table and _name not in UI['en']:
+        return core.text(_name, _lang, **kw)
+    return table.get(_name, UI['en'].get(_name)).format(**kw)
+
+
+def esc(text):
+    """Text for Pango markup."""
+    return GLib.markup_escape_text(text, -1)
+
+
+def row_markup(name, folder_shown, clauses, tag='', marks=MARKS['light'], lang=None):
+    """(main, highlighted name) markup of a row: the name (and its similar-version tag) over the
+    folder as shown; matches marked with the colours marks = (background, text)."""
+    name_m, dir_m = core.highlight_row(name, folder_shown, clauses, 'pango', marks[0], marks[1])
+    if tag:
+        name_m += '  <span size="small" fgalpha="60%%">%s</span>' % core._escape_pango(tag)
+    return '%s\n<span size="small" fgalpha="70%%">%s</span>' % (name_m, dir_m)
+
+
+def meta_markup(size_text, time_text):
+    return '%s\n<span size="small" fgalpha="70%%">%s</span>' % (core._escape_pango(size_text),
+                                                                  core._escape_pango(time_text))
 
 
 class Window:
@@ -690,6 +726,19 @@ class Window:
         self.hotkey = DesktopHotkey()
         self.searches = 0
         self.closed = False             # set when the window is destroyed; late callbacks do nothing
+        self.type = 'all'               # type filter (a key of core.FILTER_KEYS)
+        self.scope = ''                 # folder filter, '' for none
+        self.view = None                # result rows in the filters, None for all of them
+        self.facets = None              # rows per type over the whole result, once counted
+        self.suggest = []               # [(folder, rows)] offered as folder filters
+        self.clauses = []               # the parsed query, for marking matches
+        self.folded_by_hand = False     # "fold to a search box" chosen while there is text
+        self.wide = None                # the details panel shows (wide enough window)
+        self.marks = MARKS['light']
+        self.pulse_id = None
+        self.empty_kind = None
+        self.chips_sig = None
+        self.syncing = False            # filter buttons being set from the code, not clicked
         self.build()
 
     # ------------------------------------------------------------ layout
@@ -698,10 +747,19 @@ class Window:
         w = self.win = Gtk.ApplicationWindow(application=self.app)
         w.set_title(core.text('app_name', self.lang))
         st = self.ui_state
-        w.set_default_size(st.get('width', DEFAULT_SIZE[0]), st.get('height', DEFAULT_SIZE[1]))
+        if 'dark' in st:
+            Gtk.Settings.get_default().set_property('gtk-application-prefer-dark-theme', st['dark'])
+        provider = Gtk.CssProvider()
+        provider.load_from_data(CSS)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider,
+                                                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        w.set_default_size(max(MIN_WIDTH, st.get('width', DEFAULT_SIZE[0])), st.get('height', DEFAULT_SIZE[1]))
+        geo = Gdk.Geometry()
+        geo.min_width, geo.min_height = MIN_WIDTH, 1
+        w.set_geometry_hints(None, geo, Gdk.WindowHints.MIN_SIZE)
         if st.get('maximized'):
             w.maximize()
-        self.size = (st.get('width', DEFAULT_SIZE[0]), st.get('height', DEFAULT_SIZE[1]))
+        self.size = (max(MIN_WIDTH, st.get('width', DEFAULT_SIZE[0])), st.get('height', DEFAULT_SIZE[1]))
         self.maximized = bool(st.get('maximized'))
         if 'x' in st and 'y' in st and self.can_place(st['x'], st['y']):
             w.move(st['x'], st['y'])
@@ -709,16 +767,17 @@ class Window:
         w.connect('window-state-event', self.on_window_state)
         w.connect('notify::is-active', lambda *_: GLib.idle_add(self.update_opacity))
         w.set_icon_name('system-search')
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        box = self.box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         w.add(box)
+        lang = self.lang
 
+        # the search row, with the scan progress as a 2 px line along its lower edge
         top = self.top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
-        top.set_margin_start(6)
-        top.set_margin_end(6)
-        top.set_margin_top(4)
-        top.set_margin_bottom(4)
+        for side, px in (('start', 8), ('end', 8), ('top', 8), ('bottom', 8)):
+            getattr(top, 'set_margin_' + side)(px)
         self.entry = Gtk.SearchEntry()
-        self.entry.set_placeholder_text(t(self.lang, 'search'))
+        self.entry.get_style_context().add_class('ff-search')
+        self.entry.set_placeholder_text(t(lang, 'search'))
         self.entry.connect('search-changed', self.on_search_changed)
         self.entry.connect('key-press-event', self.on_entry_key)
         self.entry.connect('activate', lambda *_: self.open_current())
@@ -737,76 +796,136 @@ class Window:
         top.pack_start(over, True, True, 0)
         self.gear = Gtk.Button.new_from_icon_name('preferences-system-symbolic', Gtk.IconSize.BUTTON)
         self.gear.set_relief(Gtk.ReliefStyle.NONE)
-        self.gear.set_tooltip_text(t(self.lang, 'settings'))
-        self.gear.get_accessible().set_name(t(self.lang, 'settings'))
+        self.gear.set_tooltip_text(t(lang, 'settings'))
+        self.gear.get_accessible().set_name(t(lang, 'settings'))
         self.gear.connect('clicked', lambda *_: self.open_settings())
         top.pack_start(self.gear, False, False, 0)
-        box.pack_start(top, False, False, 0)
+        self.more = Gtk.MenuButton()
+        self.more.set_relief(Gtk.ReliefStyle.NONE)
+        self.more.add(Gtk.Image.new_from_icon_name('view-more-symbolic', Gtk.IconSize.BUTTON))
+        self.more.set_tooltip_text(t(lang, 'more'))
+        self.more.get_accessible().set_name(t(lang, 'more'))
+        self.more.set_popover(self.build_more_menu())
+        top.pack_start(self.more, False, False, 0)
+        top_over = self.top_over = Gtk.Overlay()
+        top_over.add(top)
+        self.progress = Gtk.ProgressBar()
+        self.progress.get_style_context().add_class('ff-scan')
+        self.progress.set_valign(Gtk.Align.END)
+        self.progress.set_no_show_all(True)
+        self.progress.set_pulse_step(0.08)
+        top_over.add_overlay(self.progress)
+        top_over.set_overlay_pass_through(self.progress, True)
+        box.pack_start(top_over, False, False, 0)
         self.settings = None            # the open settings dialog
+        self.keys_dialog = None
+
+        # a regular expression that cannot be used is explained under the box
+        self.qerror = Gtk.Label(xalign=0)
+        self.qerror.set_line_wrap(True)
+        self.qerror.get_style_context().add_class('ff-qerror')
+        self.qerror.set_margin_start(12)
+        self.qerror.set_margin_end(12)
+        self.qerror.set_margin_bottom(4)
+        self.qerror_box = Gtk.Revealer()
+        self.qerror_box.add(self.qerror)
+        box.pack_start(self.qerror_box, False, False, 0)
+
+        # type filters with counts, folder suggestions, the order
+        fb = self.filterbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        fb.set_margin_start(8)
+        fb.set_margin_end(8)
+        fb.set_margin_bottom(6)
+        chips_sw = Gtk.ScrolledWindow()
+        chips_sw.set_policy(Gtk.PolicyType.EXTERNAL, Gtk.PolicyType.NEVER)
+        chips_sw.set_propagate_natural_height(True)
+        self.chips = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.chips.get_accessible().set_name(t(lang, 'aria_filter_type'))
+        chips_sw.add(self.chips)
+        fb.pack_start(chips_sw, True, True, 0)
+        self.chip_buttons = {}
+        for key in core.FILTER_KEYS:
+            b = Gtk.ToggleButton()
+            b.get_style_context().add_class('ff-chip')
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=5)
+            inner.pack_start(Gtk.Label(label=t(lang, 'cat_' + key)), False, False, 0)
+            n = Gtk.Label()
+            n.get_style_context().add_class('ff-n')
+            inner.pack_start(n, False, False, 0)
+            b.add(inner)
+            b.count_label = n
+            b.connect('toggled', self.on_chip, key)
+            self.chips.pack_start(b, False, False, 0)
+            self.chip_buttons[key] = b
+        self.scope_sep = Gtk.Separator(orientation=Gtk.Orientation.VERTICAL)
+        self.chips.pack_start(self.scope_sep, False, False, 4)
+        self.scope_buttons = []
+        for _ in range(2):
+            b = Gtk.ToggleButton()
+            b.get_style_context().add_class('ff-chip')
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            b.set_image(Gtk.Image.new_from_icon_name('folder-symbolic', Gtk.IconSize.MENU))
+            b.set_always_show_image(True)
+            b.connect('toggled', self.on_scope_chip)
+            self.chips.pack_start(b, False, False, 0)
+            self.scope_buttons.append(b)
+        self.sortbtn = Gtk.MenuButton()
+        self.sortbtn.set_relief(Gtk.ReliefStyle.NONE)
+        sort_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        sort_box.pack_start(Gtk.Image.new_from_icon_name('view-sort-descending-symbolic', Gtk.IconSize.MENU),
+                            False, False, 0)
+        self.sort_label = Gtk.Label()
+        sort_box.pack_start(self.sort_label, False, False, 0)
+        sort_box.pack_start(Gtk.Image.new_from_icon_name('pan-down-symbolic', Gtk.IconSize.MENU), False, False, 0)
+        self.sortbtn.add(sort_box)
+        self.sortbtn.get_accessible().set_name(t(lang, 'aria_sort'))
+        self.sortbtn.set_popover(self.build_sort_menu())
+        fb.pack_end(self.sortbtn, False, False, 0)
+        box.pack_start(fb, False, False, 0)
 
         row = self.list_area = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.pack_start(row, True, True, 0)
 
-        # icon name, name, folder, size, time, tooltip (Pango markup), similar-version tag
-        self.store = Gtk.ListStore(str, str, str, str, str, str, str)
+        # icon name, name, folder, size, time, tooltip (Pango markup), similar-version tag,
+        # name over folder (markup), size over time (markup)
+        self.store = Gtk.ListStore(str, str, str, str, str, str, str, str, str)
         tv = self.tree = Gtk.TreeView(model=self.store)
         tv.set_has_tooltip(True)
         tv.connect('query-tooltip', self.on_query_tooltip)
         tv.set_enable_search(False)
-        tv.set_headers_clickable(True)
+        tv.set_headers_visible(False)
         tv.set_fixed_height_mode(True)
         tv.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
         tv.set_vexpand(True)
         tv.set_hexpand(True)
-        self.columns = {}
-        tv.set_column_drag_function(self.column_drop_ok)
-        for i, (key, label) in enumerate(COLUMNS):
-            col = Gtk.TreeViewColumn(t(self.lang, label))
-            col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
-            if key == 'locate':
-                # a button-like icon at the end of every row
-                theme = Gtk.IconTheme.get_default()
-                icon = Gtk.CellRendererPixbuf()
-                icon.set_padding(2, 1)
-                icon.set_property('icon-name', next((n for n in LOCATE_ICONS if theme.has_icon(n)), 'folder'))
-                col.pack_start(icon, True)
-                head = Gtk.Image.new_from_icon_name(icon.get_property('icon-name'), Gtk.IconSize.MENU)
-                head.set_tooltip_text(t(self.lang, 'locate_tip'))
-                head.show()
-                col.set_widget(head)
-                col.set_fixed_width(self.column_width(key))
-                self.columns[key] = col
-                continue
-            col.set_resizable(True)
-            col.set_reorderable(True)
-            col.set_clickable(True)
-            col.connect('clicked', self.on_header, key)
-            if key == 'name':
-                icon = Gtk.CellRendererPixbuf()
-                icon.set_padding(2, 1)
-                col.pack_start(icon, False)
-                col.add_attribute(icon, 'icon-name', 0)
-                tag = self.tag_cell = Gtk.CellRendererText()
-                tag.set_padding(2, 1)
-                tag.set_property('scale', 0.85)         # dimmed by dim_tags: still read as plain text
-                col.pack_start(tag, False)
-                col.add_attribute(tag, 'text', COL_TAG)
-                col.set_expand(False)
-            cell = Gtk.CellRendererText()
-            cell.set_padding(4, 1)              # compact rows
-            cell.set_property('ellipsize', Pango.EllipsizeMode.MIDDLE if key == 'path' else Pango.EllipsizeMode.END)
-            if key in ('size', 'mtime'):
-                cell.set_property('xalign', 1.0 if key == 'size' else 0.0)
-            col.pack_start(cell, True)
-            col.add_attribute(cell, 'text', i + 1)
-            col.set_fixed_width(self.column_width(key))
-            if key == 'path':
-                col.set_expand(True)
-            self.columns[key] = col
-        for key in list(self.ui_state.get('order', DATA_COLUMNS)) + ['locate']:
-            tv.append_column(self.columns[key])
-        tv.connect('style-updated', lambda *_: self.dim_tags())
-        self.dim_tags()
+        tv.get_accessible().set_name(t(lang, 'aria_results'))
+        col = self.row_col = Gtk.TreeViewColumn()
+        col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        col.set_expand(True)
+        icon = self.icon_cell = Gtk.CellRendererPixbuf()
+        icon.set_padding(8, 0)
+        icon.set_property('stock-size', Gtk.IconSize.LARGE_TOOLBAR)
+        col.pack_start(icon, False)
+        col.add_attribute(icon, 'icon-name', 0)
+        main = self.main_cell = Gtk.CellRendererText()
+        main.set_property('ellipsize', Pango.EllipsizeMode.END)
+        main.set_property('yalign', 0.5)
+        col.pack_start(main, True)
+        col.add_attribute(main, 'markup', COL_MAIN)
+        meta_col = self.meta_col = Gtk.TreeViewColumn()
+        meta_col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        meta_col.set_fixed_width(META_WIDTH)
+        meta = self.meta_cell = Gtk.CellRendererText()
+        meta.set_property('xalign', 1.0)
+        meta.set_property('yalign', 0.5)
+        meta.set_property('alignment', Pango.Alignment.RIGHT)
+        meta.set_padding(10, 0)
+        meta_col.pack_start(meta, True)
+        meta_col.add_attribute(meta, 'markup', COL_META)
+        tv.append_column(col)
+        tv.append_column(meta_col)
+        tv.connect('style-updated', lambda *_: self.on_style())
         tv.connect('scroll-event', self.on_scroll)
         tv.connect('key-press-event', self.on_tree_key)
         tv.connect('button-press-event', self.on_button)
@@ -816,57 +935,66 @@ class Window:
         tv.drag_source_add_uri_targets()
         tv.drag_source_add_text_targets()
         tv.connect('drag-data-get', self.on_drag_data_get)
+        theme = Gtk.IconTheme.get_default()
+        self.type_icons = {k: next((n for n in names if theme.has_icon(n)), names[-1]) for k, names in TYPE_ICONS.items()}
 
         self.adj = Gtk.Adjustment(value=0, lower=0, upper=0, step_increment=1, page_increment=10, page_size=1)
         self.adj.connect('value-changed', self.on_adj)
         self.scrollbar = Gtk.Scrollbar(orientation=Gtk.Orientation.VERTICAL, adjustment=self.adj)
         # EXTERNAL: the tree may be shorter than its rows; the store never holds more than fit
         self.sw = Gtk.ScrolledWindow()
-        self.sw.set_policy(Gtk.PolicyType.AUTOMATIC, Gtk.PolicyType.EXTERNAL)
+        self.sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.EXTERNAL)
         self.sw.add(tv)
         self.sw.connect('size-allocate', self.on_area_allocate)
         over = Gtk.Overlay()
         over.add(self.sw)
-        self.empty = Gtk.Label(label=t(self.lang, 'no_match'))
-        self.empty.get_style_context().add_class('dim-label')
-        self.empty.set_halign(Gtk.Align.CENTER)
-        self.empty.set_valign(Gtk.Align.CENTER)
-        self.empty.set_no_show_all(True)
+        self.empty = self.build_empty()
         over.add_overlay(self.empty)
-        over.set_overlay_pass_through(self.empty, True)
+        over.set_overlay_pass_through(self.empty, False)
         row.pack_start(over, True, True, 0)
         row.pack_start(self.scrollbar, False, False, 0)
+        self.preview = self.build_preview()
+        row.pack_start(self.preview, False, False, 0)
 
         bar = self.bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        bar.set_margin_start(6)
-        bar.set_margin_end(6)
-        bar.set_margin_top(2)
-        bar.set_margin_bottom(2)
+        bar.get_style_context().add_class('ff-statusbar')
         self.status = Gtk.Label(xalign=0)
         self.status.set_ellipsize(Pango.EllipsizeMode.END)
         self.status.set_selectable(False)
+        self.hints = Gtk.Label()
+        self.hints.get_style_context().add_class('dim-label')
+        self.hints.set_ellipsize(Pango.EllipsizeMode.END)
+        self.hints.set_no_show_all(True)
+        self.hints.set_text('   '.join('%s %s' % pair for pair in (
+            ('↑↓', t(lang, 'keys_select')), ('Enter', t(lang, 'open')),
+            (self.key_label('locate') or 'Ctrl+Enter', t(lang, 'locate')), ('?', t(lang, 'help')))))
+        self.dot = Gtk.Label(label='●')
+        self.dot.get_style_context().add_class('ff-dot')
+        self.dot.get_accessible().set_name('')
         self.state = Gtk.Label(xalign=1)
         self.state.set_ellipsize(Pango.EllipsizeMode.START)
-        bar.pack_start(self.status, True, True, 0)
-        bar.pack_end(self.state, False, False, 0)
+        bar.pack_start(self.status, False, True, 0)
+        bar.set_center_widget(self.hints)
+        bar.pack_end(self.state, False, True, 0)
+        bar.pack_end(self.dot, False, False, 0)
         box.pack_start(bar, False, False, 0)
 
         self.menu = Gtk.Menu()
-        for key, cb in (('open_folder', self.open_folder), ('open', self.open_current),
-                        ('copy_file', self.copy_file), ('copy_path', self.copy_path)):
-            item = Gtk.MenuItem(label=t(self.lang, key))
+        self.menu_items = {}
+        for entry in (('open', 'open', self.open_current), ('locate', 'open_folder', self.open_folder),
+                      ('copy_path', 'copy_path', self.copy_path), ('copy_file', 'copy_file', self.copy_file),
+                      None, ('exclude', 'exclude_parent', self.exclude_current),
+                      ('jump', 'jump_newest', self.jump_to_newest), None,
+                      ('rescan', 'rescan', self.rescan)):
+            if entry is None:       # groups: open, copy / this folder, versions / the whole index
+                self.menu.append(Gtk.SeparatorMenuItem())
+                continue
+            key, label, cb = entry
+            item = Gtk.MenuItem(label=t(lang, label))
             item.connect('activate', lambda _i, f=cb: f())
             self.menu.append(item)
-        self.menu.append(Gtk.SeparatorMenuItem())
-        self.jump_item = Gtk.MenuItem(label=t(self.lang, 'jump_newest'))
-        self.jump_item.connect('activate', lambda *_: self.jump_to_newest())
-        self.menu.append(self.jump_item)
-        self.exclude_item = Gtk.MenuItem(label=t(self.lang, 'exclude_parent'))
-        self.exclude_item.connect('activate', lambda *_: self.exclude_current())
-        self.menu.append(self.exclude_item)
-        item = Gtk.MenuItem(label=t(self.lang, 'rescan'))
-        item.connect('activate', lambda *_: self.rescan())
-        self.menu.append(item)
+            self.menu_items[key] = item
+        self.jump_item, self.exclude_item = self.menu_items['jump'], self.menu_items['exclude']
         self.menu.show_all()
         self.menu.connect('deactivate', lambda *_: GLib.idle_add(self.update_opacity))
 
@@ -874,13 +1002,172 @@ class Window:
         w.connect('destroy', lambda *_: setattr(self, 'closed', True))
         self.accel = None
         self.apply_keys(self.keys)
-        self.update_sort_indicators()
+        self.update_sort_label()
         w.show_all()
         self.expanded = None
+        self.on_style()
         self.apply_layout()
+        self.update_preview()
         self.entry.grab_focus()
 
-    # ------------------------------------------------------------ index lifecycle
+    def build_more_menu(self):
+        """The "more" menu beside the settings: shortcuts, appearance, fold, rescan, about."""
+        pop = Gtk.Popover()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        for side in ('start', 'end', 'top', 'bottom'):
+            getattr(box, 'set_margin_' + side)(6)
+        self.more_items = {}
+        for key, label, cb in (('keys', 'more_keys', self.open_keys), ('theme', 'more_theme', self.toggle_theme),
+                               ('fold', 'more_fold', self.toggle_fold), ('rescan', 'rescan', self.rescan),
+                               ('about', 'more_about', self.show_about)):
+            b = Gtk.ModelButton(text=t(self.lang, label))
+            b.connect('clicked', lambda _b, f=cb: (pop.popdown(), f()))
+            box.pack_start(b, False, False, 0)
+            self.more_items[key] = b
+        box.show_all()
+        pop.add(box)
+        pop.connect('show', lambda *_: self.more_items['fold'].set_property(
+            'text', t(self.lang, 'more_unfold' if not self.expanded and self.entry.get_text() else 'more_fold')))
+        return pop
+
+    def build_sort_menu(self):
+        pop = Gtk.Popover()
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        for side in ('start', 'end', 'top', 'bottom'):
+            getattr(box, 'set_margin_' + side)(6)
+        self.sort_items = []
+        for i, label in enumerate(core.sort_labels(self.lang)):
+            b = Gtk.ModelButton(text=label, role=Gtk.ButtonRole.RADIO)
+            b.connect('clicked', lambda _b, k=i: (pop.popdown(), self.set_sort(*core.SORT_CHOICES[k])))
+            box.pack_start(b, False, False, 0)
+            self.sort_items.append(b)
+        box.show_all()
+        pop.add(box)
+        return pop
+
+    def build_empty(self):
+        """What the list area shows without rows: a start hint, no match, or loading."""
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        box.set_halign(Gtk.Align.CENTER)
+        box.set_valign(Gtk.Align.START)
+        box.set_margin_top(48)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+        box.set_no_show_all(True)
+        self.empty_icon = Gtk.Image()
+        self.empty_icon.set_pixel_size(48)
+        self.empty_spinner = Gtk.Spinner()
+        self.empty_title = Gtk.Label()
+        self.empty_title.get_style_context().add_class('ff-empty-title')
+        self.empty_title.set_line_wrap(True)
+        self.empty_title.set_justify(Gtk.Justification.CENTER)
+        self.empty_text = Gtk.Label()
+        self.empty_text.set_line_wrap(True)
+        self.empty_text.set_max_width_chars(46)
+        self.empty_text.set_justify(Gtk.Justification.CENTER)
+        self.empty_text.get_style_context().add_class('dim-label')
+        self.empty_buttons = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+        self.empty_buttons.set_halign(Gtk.Align.CENTER)
+        for widget in (self.empty_icon, self.empty_spinner, self.empty_title, self.empty_text, self.empty_buttons):
+            box.pack_start(widget, False, False, 0)
+            widget.show()
+        return box
+
+    def build_preview(self):
+        """The details of the selected row and its actions; the index state without one."""
+        lang = self.lang
+        outer = Gtk.ScrolledWindow()
+        outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        outer.set_min_content_width(PREVIEW_WIDTH)
+        outer.set_max_content_width(PREVIEW_WIDTH)
+        outer.set_propagate_natural_width(True)
+        outer.set_hexpand(False)        # the labels inside expand; the panel keeps its width
+        panel = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        panel.get_style_context().add_class('ff-preview')
+        panel.get_accessible().set_name(t(lang, 'aria_preview'))
+        outer.add(panel)
+
+        info = self.pv_index = Gtk.Grid(column_spacing=12, row_spacing=8)
+        self.pv_index_values = {}
+        for r, key in enumerate(('pv_index_entries', 'pv_index_folders', 'pv_index_watch')):
+            info.attach(Gtk.Label(label=t(lang, key), xalign=0, hexpand=True), 0, r, 1, 1)
+            v = self.pv_index_values[key] = Gtk.Label(xalign=1)
+            v.set_line_wrap(True)
+            info.attach(v, 1, r, 1, 1)
+        self.pv_index_tip = Gtk.Label(xalign=0)
+        self.pv_index_tip.set_line_wrap(True)
+        self.pv_index_tip.get_style_context().add_class('dim-label')
+        info.attach(self.pv_index_tip, 0, 3, 2, 1)
+        panel.pack_start(info, False, False, 0)
+
+        item = self.pv_item = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.pv_icon = Gtk.Image()
+        self.pv_icon.set_pixel_size(40)
+        self.pv_icon.set_valign(Gtk.Align.START)
+        head.pack_start(self.pv_icon, False, False, 0)
+        names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        self.pv_name = Gtk.Label(xalign=0)
+        self.pv_name.get_style_context().add_class('ff-preview-name')
+        self.pv_name.set_line_wrap(True)
+        self.pv_name.set_line_wrap_mode(Pango.WrapMode.WORD_CHAR)
+        self.pv_name.set_lines(3)
+        self.pv_name.set_ellipsize(Pango.EllipsizeMode.END)
+        self.pv_name.set_max_width_chars(28)
+        self.pv_kind = Gtk.Label(xalign=0)
+        self.pv_kind.get_style_context().add_class('dim-label')
+        names.pack_start(self.pv_name, False, False, 0)
+        names.pack_start(self.pv_kind, False, False, 0)
+        head.pack_start(names, True, True, 0)
+        item.pack_start(head, False, False, 0)
+        path_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=4)
+        self.pv_path = Gtk.Entry()
+        self.pv_path.set_editable(False)
+        self.pv_path.set_can_focus(True)
+        self.pv_path.get_accessible().set_name(t(lang, 'pv_hit_path'))
+        path_row.pack_start(self.pv_path, True, True, 0)
+        b = Gtk.Button.new_from_icon_name('edit-copy-symbolic', Gtk.IconSize.BUTTON)
+        b.set_tooltip_text(t(lang, 'copy_path'))
+        b.get_accessible().set_name(t(lang, 'copy_path'))
+        b.connect('clicked', lambda *_: self.copy_path())
+        path_row.pack_start(b, False, False, 0)
+        item.pack_start(path_row, False, False, 0)
+        grid = Gtk.Grid(column_spacing=14, row_spacing=6)
+        self.pv_values = {}
+        for r, key in enumerate(('pv_size', 'pv_modified', 'pv_type', 'pv_hit')):
+            lab = Gtk.Label(label=t(lang, key), xalign=0)
+            lab.get_style_context().add_class('dim-label')
+            grid.attach(lab, 0, r, 1, 1)
+            v = self.pv_values[key] = Gtk.Label(xalign=0, hexpand=True)
+            v.set_line_wrap(True)
+            v.set_selectable(True)
+            grid.attach(v, 1, r, 1, 1)
+        item.pack_start(grid, False, False, 0)
+        self.pv_open = Gtk.Button(label=t(lang, 'open'))
+        self.pv_open.get_style_context().add_class('suggested-action')
+        self.pv_open.connect('clicked', lambda *_: self.open_current())
+        item.pack_start(self.pv_open, False, False, 0)
+        acts = Gtk.Grid(column_spacing=6, row_spacing=6, column_homogeneous=True)
+        for i, (label, cb) in enumerate((('open_folder', self.open_folder), ('copy_path', self.copy_path),
+                                         ('copy_file', self.copy_file))):
+            b = Gtk.Button(label=t(lang, label))
+            b.connect('clicked', lambda _b, f=cb: f())
+            acts.attach(b, i % 2, i // 2, 1, 1)
+        item.pack_start(acts, False, False, 0)
+        self.pv_keys = Gtk.Label(xalign=0)
+        self.pv_keys.set_line_wrap(True)
+        self.pv_keys.get_style_context().add_class('dim-label')
+        item.pack_start(Gtk.Separator(), False, False, 4)
+        item.pack_start(self.pv_keys, False, False, 0)
+        panel.pack_start(item, False, False, 0)
+        side = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+        side.pack_start(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL), False, False, 0)
+        side.pack_start(outer, False, False, 0)
+        side.set_hexpand(False)
+        side.show_all()
+        side.hide()
+        side.set_no_show_all(True)      # shown in a window wide enough (place_preview)
+        return side
 
     def start(self):
         """Load the cache in the background, then rescan and watch."""
@@ -1085,7 +1372,7 @@ class Window:
         indexed folder itself (or outside them)."""
         if self.result is None or not 0 <= self.cur < self.count():
             return None, False
-        name, folder, size, _ = self.result.row(self.cur)
+        name, folder, size, _ = self.result.row(self.rk(self.cur))
         is_dir = size < 0
         target = os.path.join(folder, name) if is_dir else folder
         roots = self.index.config.resolved_roots()
@@ -1318,28 +1605,6 @@ class Window:
 
     # ------------------------------------------------------------ interface state and opacity
 
-    def column_width(self, key):
-        return self.ui_state.get('columns', {}).get(key, COLUMN_WIDTHS[key])
-
-    def column_order(self):
-        """The data columns as shown, left to right."""
-        keys = {c: k for k, c in self.columns.items()}
-        return [keys[c] for c in self.tree.get_columns() if keys.get(c) in DATA_COLUMNS]
-
-    def set_column_order(self, order):
-        """Show the data columns in this order, the locate column last."""
-        if not valid_order(list(order)):
-            return
-        prev = None
-        for key in order:
-            self.tree.move_column_after(self.columns[key], prev)
-            prev = self.columns[key]
-
-    def column_drop_ok(self, _tree, column, prev, nxt):
-        """Columns dragged by their headers stay in front of the locate column."""
-        locate = self.columns.get('locate')
-        return column is not locate and prev is not locate and nxt is not None
-
     @staticmethod
     def on_wayland():
         return 'wayland' in type(Gdk.Display.get_default()).__name__.lower()
@@ -1357,14 +1622,24 @@ class Window:
         return False
 
     def on_configure(self, win, _event):
+        width, height = win.get_size()
+        wide = width >= PREVIEW_MIN_WIDTH
+        if wide != self.wide:               # only when the width crosses the line
+            self.wide = wide
+            GLib.idle_add(self.place_preview)
+        self.hints.set_visible(width >= HINTS_MIN_WIDTH)
         if self.maximized:
             return False
-        width, height = win.get_size()
         # the folded height is never remembered; only the height with the list shown
         if self.expanded and height >= EXPANDED_MIN:
             self.size = (width, height)
         else:
             self.size = (width, self.size[1])
+        return False
+
+    def place_preview(self):
+        if not self.closed:
+            self.preview.set_visible(bool(self.wide))
         return False
 
     def on_window_state(self, _win, event):
@@ -1377,26 +1652,26 @@ class Window:
     # ------------------------------------------------------------ folding the list
 
     def want_expanded(self):
-        """The list shows while there is search text, and always in a maximised window."""
-        return bool(self.entry.get_text()) or self.maximized
+        """The list shows while there is search text (unless folded by hand), and always in a
+        maximised window."""
+        return (bool(self.entry.get_text()) and not self.folded_by_hand) or self.maximized
 
     def apply_layout(self):
-        """Fold the result list and status bar away under an empty search box, or unfold them
-        to the remembered height; the window keeps its width and place."""
+        """Fold the result list and status bar away under an empty search box, leaving the search
+        row alone in a window FOLDED_HEIGHT high, or unfold them to the remembered height; the
+        window keeps its width and place."""
         want = self.want_expanded()
         if want != self.expanded:
-            if self.expanded:
-                for c in self.columns.values():     # keep widths dragged by hand
-                    if c.get_width() > 0:
-                        c.set_fixed_width(c.get_width())
             self.expanded = want
             self.list_area.set_visible(want)
             self.bar.set_visible(want)
             self.hint.set_visible(not want)
+            self.box.set_child_packing(self.top_over, not want, True, 0, Gtk.PackType.START)
+            self.top_over.set_valign(Gtk.Align.FILL if want else Gtk.Align.CENTER)
             if not self.maximized:
-                self.win.resize(self.size[0], self.size[1] if want else 1)
-        self.empty.set_visible(want and self.result is not None and self.count() == 0 and self.message is None
-                               and bool(self.query))
+                self.win.resize(self.size[0], self.size[1] if want else FOLDED_HEIGHT)
+        self.update_filterbar()
+        self.update_empty()
         self.update_hint()
 
     def update_hint(self):
@@ -1450,10 +1725,9 @@ class Window:
 
     def ui_state_now(self):
         st = {'width': self.size[0], 'height': self.size[1], 'maximized': self.maximized,
-              'sort': self.sort, 'desc': self.desc,
-              'columns': {k: (c.get_width() if self.expanded else 0) or c.get_fixed_width()
-                          for k, c in self.columns.items()},
-              'order': self.column_order()}
+              'sort': self.sort, 'desc': self.desc}
+        if 'dark' in self.ui_state:
+            st['dark'] = self.ui_state['dark']
         if not self.on_wayland() and not self.maximized:
             st['x'], st['y'] = self.win.get_position()
         return st
@@ -1496,6 +1770,7 @@ class Window:
         if self.result is not None and self.entry.get_text() == self.query:
             return                      # searched already: an action ran the search before the delay ended
         self.pinned = None
+        self.folded_by_hand = False
         self.run_search()
 
     def sync_search(self):
@@ -1516,29 +1791,158 @@ class Window:
         return -1
 
     def run_search(self, keep=False):
-        """Search for the entry text. keep: stay on the selected path and scroll position."""
+        """Search for the entry text. keep: stay on the selected path, the scroll position and the
+        filters."""
         keep_path = self.current_path() if keep else None
         top = self.top if keep else 0
-        self.query = self.entry.get_text()
+        text = self.entry.get_text()
+        if text != self.query and not keep:
+            self.type, self.scope = 'all', ''
+        self.query = text
         self.searches += 1
         try:
-            self.result = self.index.search(self.query, self.sort, self.desc)
+            result = self.index.search(self.query, self.sort, self.desc)
+            self.clauses = core.parse_query(self.query, False, self.index.config.match_path())
             self.message = self.pinned
+            self.set_qerror('')
         except core.QueryError as e:
-            self.result = None
-            self.message = (str(e), 'warn')
+            # the last result stays; the reason shows under the box
+            self.set_qerror(str(e))
+            self.update_status()
+            return
+        self.result = result
+        self.start_facets()
+        self.view = core.build_view(result, self.type, self.scope) if (self.type != 'all' or self.scope) else None
+        self.start_versions()
+        self.place_rows(keep_path, top)
+        self.update_status()
+
+    def place_rows(self, keep_path=None, top=0):
+        """Show the rows of the view from the top (or keep_path where it is), selecting the first."""
         n = self.count()
         self.top = max(0, min(top, n - self.rows))
-        self.cur = -1
+        self.cur = 0 if n else -1
         if keep_path is not None:
-            for k in range(self.top, min(n, self.top + self.rows)):
-                if self.result.path(k) == keep_path:
-                    self.cur = k
+            for i in range(self.top, min(n, self.top + self.rows)):
+                if self.result.path(self.rk(i)) == keep_path:
+                    self.cur = i
                     break
-        self.start_versions()
+            else:
+                self.cur = self.top if n else -1
         self.sync_adjustment()
         self.fill()
+        self.update_preview()
+
+    def set_qerror(self, text):
+        self.qerror.set_text(text)
+        self.qerror_box.set_reveal_child(bool(text))
+
+    def rk(self, i):
+        """Row i of the view as a row of the whole result."""
+        return i if self.view is None else self.view[i]
+
+    def start_facets(self):
+        """Count the rows per type (and the folder suggestions) over the whole result: small
+        results at once, others in the background."""
+        res = self.result
+        self.facets, self.suggest = None, []
+        if not self.query:          # nothing to narrow: the filters are not shown
+            return
+        self.facets = core.facets_of(res)
+        if len(res) <= core.SCOPE_SUGGEST_MIN:
+            return
+        if len(res) <= core.FACETS_SYNC:
+            self.suggest = core.scope_suggest_of(res)
+            return
+
+        def work():
+            got = core.scope_suggest_of(res, stop=lambda: self.result is not res or self.closed)
+            GLib.idle_add(done, got)
+
+        def done(got):
+            if not self.closed and self.result is res and got is not None:
+                self.suggest = got
+                self.update_filterbar()
+            return False
+        threading.Thread(target=work, name='suggest', daemon=True).start()
+
+    def set_filter(self, type_=None, scope=None):
+        """Narrow the result to a type or a folder without searching again (the similar-version
+        marks stay)."""
+        if type_ is not None:
+            self.type = type_
+        if scope is not None:
+            self.scope = scope
+            self.type = 'all'
+        if self.result is None:
+            return
+        self.view = core.build_view(self.result, self.type, self.scope)
+        self.place_rows()
         self.update_status()
+
+    def on_chip(self, button, key):
+        if self.syncing:
+            return
+        if button.get_active():
+            self.set_filter(type_=key)
+        else:
+            self.set_filter(type_='all')
+        self.entry.grab_focus_without_selecting()
+
+    def on_scope_chip(self, button):
+        if self.syncing:
+            return
+        self.set_filter(scope=button.folder if button.get_active() else '')
+        self.entry.grab_focus_without_selecting()
+
+    def update_filterbar(self):
+        """Show the filters while there are results to narrow; their counts from the whole result."""
+        show = bool(self.expanded and self.result is not None and self.query
+                    and (len(self.result) or self.type != 'all' or self.scope))
+        self.filterbar.set_visible(show)
+        if not show:
+            return
+        sig = (id(self.result), self.type, self.scope, None if self.facets is None else tuple(self.facets.items()),
+               tuple(self.suggest))
+        if sig == self.chips_sig:
+            return
+        self.chips_sig = sig
+        self.syncing = True
+        try:
+            for key, b in self.chip_buttons.items():
+                n = None if self.facets is None else self.facets.get(key, 0)
+                b.count_label.set_text('' if n is None else '{:,}'.format(n))
+                b.set_active(self.type == key)
+                b.set_sensitive(key == 'all' or n is None or n > 0 or self.type == key)
+                b.set_visible(key != 'other' or bool(n))
+                b.get_accessible().set_name('%s %s' % (t(self.lang, 'cat_' + key), '' if n is None else n))
+            scopes = [(self.scope, None)] if self.scope else list(self.suggest)
+            for i, b in enumerate(self.scope_buttons):
+                if i < len(scopes):
+                    folder, n = scopes[i]
+                    shown = core.short_dir(core.display(folder))
+                    b.folder = folder
+                    b.set_label('%s ×' % shown if n is None else '%s  %s' % (shown, '{:,}'.format(n)))
+                    b.set_tooltip_text(core.display(folder))
+                    b.set_active(n is None)
+                    b.show()
+                else:
+                    b.hide()
+            self.scope_sep.set_visible(bool(scopes))
+        finally:
+            self.syncing = False
+
+    def set_sort(self, sort, desc):
+        self.sort, self.desc = sort, desc
+        self.update_sort_label()
+        self.run_search(keep=True)
+
+    def update_sort_label(self):
+        labels = core.sort_labels(self.lang)
+        k = next((i for i, c in enumerate(core.SORT_CHOICES) if c == (self.sort, self.desc)), None)
+        self.sort_label.set_text(labels[k] if k is not None else labels[0])
+        for i, b in enumerate(getattr(self, 'sort_items', ())):
+            b.set_property('active', i == k)
 
     def start_versions(self):
         """Group similar versions in the result: small results at once, others in the background
@@ -1563,40 +1967,56 @@ class Window:
         threading.Thread(target=work, name='versions', daemon=True).start()
 
     def jump_to_newest(self):
-        if self.versions is None:
+        if self.versions is None or self.cur < 0:
             return
-        k = self.versions.newest(self.cur)
-        if k is not None:
-            self.scroll_to(k)
+        k = self.versions.newest(self.rk(self.cur))
+        if k is None:
+            return
+        if self.view is not None:
+            i = bisect.bisect_left(self.view, k)
+            if i >= len(self.view) or self.view[i] != k:      # filtered out: show every row first
+                self.type, self.scope = 'all', ''
+                self.view = None
+                self.sync_adjustment()
+                self.update_filterbar()
+                self.update_status()
+            else:
+                k = i
+        self.scroll_to(k)
 
     def count(self):
-        return len(self.result) if self.result is not None else 0
-
-    def on_header(self, _col, key):
-        if self.sort == key:
-            self.desc = not self.desc
-        else:
-            self.sort = key
-            self.desc = DEFAULT_DESC[key]
-        self.update_sort_indicators()
-        self.run_search()
-
-    def update_sort_indicators(self):
-        for key, col in self.columns.items():
-            col.set_sort_indicator(key == self.sort)
-            if key == self.sort:
-                col.set_sort_order(Gtk.SortType.DESCENDING if self.desc else Gtk.SortType.ASCENDING)
-
-    # ------------------------------------------------------------ virtual list
+        """Rows in the view."""
+        if self.result is None:
+            return 0
+        return len(self.result) if self.view is None else len(self.view)
 
     def measure_row_height(self):
-        """Height of a row as drawn; an estimate until a row has been shown."""
+        """Height of a row as drawn: two lines of text in ROW_HEIGHT, taller with a large font."""
         if len(self.store) and self.tree.get_realized():
-            h = self.tree.get_background_area(Gtk.TreePath.new_first(), self.columns['name']).height
+            h = self.tree.get_background_area(Gtk.TreePath.new_first(), self.row_col).height
             if h > 0:
                 return h, True
-        _x, _y, _w, h = self.columns['name'].cell_get_size()
-        return max(h, 24), False
+        _x, _y, _w, h = self.row_col.cell_get_size()
+        return max(h, ROW_HEIGHT), False
+
+    def on_style(self):
+        """The theme or font changed: pad the rows to ROW_HEIGHT and pick the highlight colours."""
+        if self.closed:
+            return
+        layout = self.tree.create_pango_layout('Ag')
+        line = layout.get_pixel_size()[1]
+        two = line + int(line * 0.86) + 2
+        pad = max(2, (ROW_HEIGHT - two) // 2)
+        self.main_cell.set_padding(2, pad)
+        self.meta_cell.set_padding(10, pad)
+        color = self.tree.get_style_context().get_color(Gtk.StateFlags.NORMAL)
+        dark = (0.299 * color.red + 0.587 * color.green + 0.114 * color.blue) > 0.5     # light text: a dark theme
+        marks = MARKS['dark' if dark else 'light']
+        if marks != self.marks:
+            self.marks = marks
+            self.fill()
+        self.row_height = 0
+        GLib.idle_add(lambda: (self.closed or self.update_rows(), False)[1])
 
     def on_area_allocate(self, _sw, alloc):
         self.area_height = alloc.height
@@ -1609,8 +2029,7 @@ class Window:
         if exact:
             self.row_height = h
         h = self.row_height or h
-        header = self.columns['name'].get_button().get_allocated_height() if self.tree.get_headers_visible() else 0
-        rows = max(1, (getattr(self, 'area_height', 0) - header) // h)
+        rows = max(1, getattr(self, 'area_height', 0) // h)
         if rows != self.rows:
             self.rows = rows
             GLib.idle_add(self._after_resize)
@@ -1640,7 +2059,7 @@ class Window:
             self.fill()
 
     def fill(self):
-        """Put the visible rows of the result into the store."""
+        """Put the visible rows of the view into the store."""
         if self.closed:
             return
         res = self.result
@@ -1652,12 +2071,21 @@ class Window:
             want = end - self.top
             while len(store) > want:
                 store.remove(store.get_iter(len(store) - 1))
-            for j, k in enumerate(range(self.top, end)):
+            lang, clauses, marks, now = self.lang, self.clauses, self.marks, time.time()
+            for j, i in enumerate(range(self.top, end)):
+                k = self.rk(i)
                 name, folder, size, mtime = res.row(k)
                 mark = self.versions.mark(k) if self.versions is not None else None
-                values = ['folder' if size < 0 else 'text-x-generic', core.display(name), core.display(folder),
-                          core.human_size(size), core.human_time(mtime), self.tooltip(k, name, folder),
-                          t(self.lang, 'ver_' + mark) if mark else '']
+                tag = t(lang, 'ver_' + mark) if mark else ''
+                shown_name, shown_dir = core.display(name), core.display(folder)
+                folder_kind = size < 0
+                kind = 'folder' if folder_kind else core.category(shown_name)
+                size_text = core.text('pv_kind_folder', lang) if folder_kind else core.human_size(size)
+                short_time = core.human_time_short(mtime, now, lang)
+                values = [self.type_icons.get(kind, self.type_icons['other']), shown_name, shown_dir,
+                          core.human_size(size), core.human_time(mtime), self.tooltip(k, name, folder), tag,
+                          row_markup(shown_name, core.short_dir(shown_dir), clauses, tag, marks, lang),
+                          meta_markup(size_text, short_time)]
                 if j < len(store):
                     store.set_row(store.get_iter(j), values)
                 else:
@@ -1675,44 +2103,28 @@ class Window:
             self.filling = False
 
     def tooltip(self, k, name, folder):
-        """Tooltip of result row k: the full path, and for a similar version the size of its group
-        and the newest one; escaped for Pango markup."""
-        text = core.display(os.path.join(folder, name))
+        """Tooltip of result row k: the full path and time, and for a similar version the size of
+        its group and the newest one; escaped for Pango markup."""
+        res = self.result
+        text = core.display(os.path.join(folder, name)) + '\n' + core.human_time(res.row(k)[3])
         v = self.versions
         if v is not None and v.mark(k):
-            text += '\n' + t(self.lang, 'ver_tip', count=v.size(k), path=core.display(self.result.path(v.newest(k))))
+            text += '\n' + t(self.lang, 'ver_tip', count=v.size(k), path=core.display(res.path(v.newest(k))))
         return GLib.markup_escape_text(text, -1)
 
-    def tooltip_markup(self, j, key):
-        """Tooltip of shown row j over column key: 'Locate <name>' over the locate column, the
-        row's tooltip (full path) elsewhere."""
-        if not 0 <= j < len(self.store):
-            return None
-        if key == 'locate':
-            return GLib.markup_escape_text(t(self.lang, 'locate_item', name=self.store[j][1]), -1)
-        return self.store[j][COL_TIP]
-
     def on_query_tooltip(self, tv, x, y, keyboard, tooltip):
-        ok, bx, by, _model, path, _it = tv.get_tooltip_context(x, y, keyboard)
+        ok, _bx, _by, _model, path, _it = tv.get_tooltip_context(x, y, keyboard)
         if not ok or path is None:
             return False
-        key = None
-        if not keyboard:
-            hit = tv.get_path_at_pos(bx, by)
-            if hit is not None:
-                key = next((k for k, c in self.columns.items() if c is hit[1]), None)
-        markup = self.tooltip_markup(path.get_indices()[0], key)
-        if not markup:
+        j = path.get_indices()[0]
+        if not 0 <= j < len(self.store):
             return False
-        tooltip.set_markup(markup)
-        if key == 'locate':
-            tv.set_tooltip_cell(tooltip, path, self.columns['locate'], None)
-        else:
-            tv.set_tooltip_row(tooltip, path)
+        tooltip.set_markup(self.store[j][COL_TIP])
+        tv.set_tooltip_row(tooltip, path)
         return True
 
     def scroll_to(self, k):
-        """Make result row k visible and selected."""
+        """Make row k of the view visible and selected."""
         n = self.count()
         if n == 0:
             return
@@ -1726,13 +2138,7 @@ class Window:
         self.adj.set_value(self.top)
         self.filling = False
         self.fill()
-
-    def dim_tags(self):
-        """The version tags in the theme's text colour, faded: a set colour, not an insensitive
-        cell, so that screen readers do not call them unavailable."""
-        color = self.tree.get_style_context().get_color(Gtk.StateFlags.NORMAL)
-        color.alpha *= TAG_ALPHA
-        self.tag_cell.set_property('foreground-rgba', color)
+        self.update_preview()
 
     def on_scroll(self, _tv, event):
         ok, dx, dy = event.get_scroll_deltas()
@@ -1753,13 +2159,12 @@ class Window:
         model, it = sel.get_selected()
         if it is not None:
             self.cur = self.top + model.get_path(it).get_indices()[0]
+            self.update_preview()
 
     def current_path(self):
         if self.result is not None and 0 <= self.cur < self.count():
-            return self.result.path(self.cur)
+            return self.result.path(self.rk(self.cur))
         return None
-
-    # ------------------------------------------------------------ input
 
     def on_entry_key(self, _entry, event):
         key = event.keyval
@@ -1771,13 +2176,21 @@ class Window:
             else:
                 self.on_delete()
             return True
-        if key in (Gdk.KEY_Down, Gdk.KEY_Page_Down):
+        if key in (Gdk.KEY_Down, Gdk.KEY_Page_Down, Gdk.KEY_Up, Gdk.KEY_Page_Up):
             self.sync_search()
             if self.count():
-                self.tree.grab_focus()
-                self.scroll_to(max(self.cur, 0) if self.cur >= 0 else 0)
+                page = max(1, self.rows - 1)
+                step = {Gdk.KEY_Down: 1, Gdk.KEY_Page_Down: page, Gdk.KEY_Up: -1, Gdk.KEY_Page_Up: -page}[key]
+                self.scroll_to(max(self.cur, 0) + step if self.cur >= 0 else 0)
                 return True
             return False
+        if key == Gdk.KEY_question and not self.entry.get_text():
+            self.open_keys()
+            return True
+        if key == Gdk.KEY_Menu or (event.state & Gdk.ModifierType.SHIFT_MASK and key == Gdk.KEY_F10):
+            if self.count():
+                self.popup_menu(None)
+                return True
         for action in LIST_KEYS:
             if self.matches(event, action):
                 if action in COPY_KEYS and self.entry.get_selection_bounds():
@@ -1827,6 +2240,9 @@ class Window:
         if key == Gdk.KEY_Escape:
             self.entry.grab_focus()
             return True
+        if key == Gdk.KEY_question:
+            self.open_keys()
+            return True
         uni = Gdk.keyval_to_unicode(key)
         if uni and not ctrl and chr(uni).isprintable():
             self.entry.grab_focus_without_selecting()
@@ -1840,14 +2256,10 @@ class Window:
         if hit is None:
             return False
         k = self.top + hit[0].get_indices()[0]
-        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS and hit[1] is self.columns['locate']:
-            self.cur = k
-            self.fill()
-            self.open_folder()
-            return True
         if event.button == 3:
             self.cur = k
             self.fill()
+            self.update_preview()
             self.popup_menu(event)
             return True
         if event.type == Gdk.EventType._2BUTTON_PRESS and event.button == 1:
@@ -1859,17 +2271,26 @@ class Window:
     def popup_menu(self, event):
         if self.cur < 0:
             return
-        self.jump_item.set_visible(self.versions is not None and self.versions.mark(self.cur) == 'older')
+        raw = self.rk(self.cur)
+        self.jump_item.set_visible(self.versions is not None and self.versions.mark(raw) == 'older')
         target, is_dir = self.exclude_target()
         self.exclude_item.set_label(t(self.lang, 'exclude_this' if is_dir else 'exclude_parent'))
-        self.exclude_item.set_visible(target is not None)
+        self.exclude_item.set_sensitive(target is not None)
+        self.exclude_item.set_tooltip_text(None if target is not None else t(self.lang, 'exclude_root'))
+        self.menu_items['rescan'].set_sensitive(self.index.state != 'scanning')
+        for key, action in (('open', 'open'), ('locate', 'locate'), ('copy_path', 'copy_path'),
+                            ('copy_file', 'copy_file'), ('rescan', 'rescan')):
+            accel = 'Return' if key == 'open' and not self.keys.get('open') else self.keys.get(action)
+            keyval, mods = Gtk.accelerator_parse(accel or '')
+            child = self.menu_items[key].get_child()
+            if isinstance(child, Gtk.AccelLabel):
+                child.set_accel(keyval, mods)
         if event is not None:
             self.menu.popup_at_pointer(event)
             return
         rect = None
         if self.top <= self.cur < self.top + len(self.store):
-            rect = self.tree.get_cell_area(Gtk.TreePath.new_from_indices([self.cur - self.top]),
-                                           self.columns['name'])
+            rect = self.tree.get_cell_area(Gtk.TreePath.new_from_indices([self.cur - self.top]), self.row_col)
         if rect is not None and rect.height > 0:
             # below the selected row, at the left of its name (bin window coordinates)
             rect.x, rect.width = rect.x + 24, 1
@@ -2004,21 +2425,24 @@ class Window:
         return False
 
     def update_status(self):
+        """The one count of results (or a message for a few seconds) at the left of the status bar."""
         if getattr(self, 'expanded', None) is not None:
             self.apply_layout()
+        ctx = self.status.get_style_context()
+        for c in ('error', 'warning'):
+            ctx.remove_class(c)
         if self.message is not None:
             text, kind = self.message
             self.status.set_text(text)
-            ctx = self.status.get_style_context()
-            for c in ('error', 'warning'):
-                ctx.remove_class(c)
             if kind in ('bad', 'warn'):
                 ctx.add_class('error' if kind == 'bad' else 'warning')
             return
-        for c in ('error', 'warning'):
-            self.status.get_style_context().remove_class(c)
-        if self.result is None:
-            self.status.set_text('')
+        st = self.index.state
+        if self.result is None or (st == 'empty'):
+            self.status.set_text(t(self.lang, 'empty_loading') if st in ('empty', 'loading') else t(self.lang, 'ready'))
+            return
+        if not self.query:
+            self.status.set_text(t(self.lang, 'ready'))
             return
         text = t(self.lang, 'results_ms', count='{:,}'.format(self.count()), ms=self.result.ms)
         if self.versions is not None and self.versions.skipped:
@@ -2027,23 +2451,257 @@ class Window:
 
     def set_state(self, text):
         self.state.set_text(text)
+        self.dot.set_tooltip_text(text)
 
     def update_state(self):
         st = self.index.status()
-        if st['state'] == 'scanning':
+        scanning = st['state'] == 'scanning'
+        if scanning:
             dirs, files = st['progress']
-            key = 'first_scan' if not self.index.base.n and not self.index.extra else 'scanning'
-            parts = [t(self.lang, key, dirs='{:,}'.format(dirs), files='{:,}'.format(files))]
+            first = not self.index.base.n and not self.index.extra
+            parts = [t(self.lang, 'first_scan' if first else 'scanning_short', dirs='{:,}'.format(dirs),
+                       files='{:,}'.format(files))]
         else:
-            parts = [t(self.lang, 'entries', entries='{:,}'.format(st['entries']))]
+            parts = [core.text('watch_' + st['watch'], self.lang), t(self.lang, 'entries', count='{:,}'.format(st['entries']))]
         if st['unreadable_count']:
             parts.append(t(self.lang, 'unreadable', count=st['unreadable_count']))
-        parts.append(core.text('watch_' + st['watch'], self.lang))
         parts.append('v' + core.VERSION)
         self.set_state(' · '.join(parts))
+        ctx = self.dot.get_style_context()
+        for c in ('error', 'warning'):
+            ctx.remove_class(c)
+        if st['unreadable_count'] or (st['watch'] == 'off' and not scanning):
+            ctx.add_class('warning')
+        self.set_scanning(scanning or st['state'] in ('empty', 'loading'))
         if getattr(self, 'expanded', None) is not None:
             self.update_hint()
+            self.update_empty()
+            if self.cur < 0:
+                self.update_preview()
         return False
+
+    def set_scanning(self, on):
+        """The 2 px progress line under the search row while the index is being built or updated."""
+        if on and self.pulse_id is None:
+            self.progress.show()
+            self.pulse_id = GLib.timeout_add(PULSE_MS, self._pulse)
+        elif not on and self.pulse_id is not None:
+            GLib.source_remove(self.pulse_id)
+            self.pulse_id = None
+            self.progress.hide()
+
+    def _pulse(self):
+        if self.closed:
+            self.pulse_id = None
+            return False
+        self.progress.pulse()
+        return True
+
+    # ------------------------------------------------------------ details, empty states, panels
+
+    def update_preview(self):
+        """The details panel: the selected row, or the index state without one."""
+        if self.closed:
+            return
+        lang = self.lang
+        has = self.result is not None and 0 <= self.cur < self.count()
+        self.pv_index.set_visible(not has)
+        self.pv_item.set_visible(has)
+        if not has:
+            st = self.index.status()
+            vals = self.pv_index_values
+            vals['pv_index_entries'].set_text('{:,}'.format(st['entries']))
+            vals['pv_index_folders'].set_text('{:,}'.format(len(self.index.base.dirs)))
+            vals['pv_index_watch'].set_text(core.text('watch_' + st['watch'], lang))
+            toggle = self.keys.get('toggle')
+            tip = t(lang, 'index_tip')
+            if toggle:
+                tip += '\n' + t(lang, 'hotkey_tip', accel=self.accel_label(toggle))
+            self.pv_index_tip.set_text(tip)
+            return
+        k = self.rk(self.cur)
+        name, folder, size, mtime = self.result.row(k)
+        shown = core.display(name)
+        is_dir = size < 0
+        kind = 'folder' if is_dir else core.category(shown)
+        self.pv_icon.set_from_icon_name(self.type_icons.get(kind, self.type_icons['other']), Gtk.IconSize.DIALOG)
+        self.pv_icon.set_pixel_size(40)
+        self.pv_name.set_text(shown)
+        ext = core.extension(shown)
+        kind_text = t(lang, 'pv_kind_folder') if is_dir else (t(lang, 'pv_kind_file', ext=ext.upper()) if ext
+                                                              else t(lang, 'cat_other'))
+        self.pv_kind.set_text(kind_text if is_dir else '%s · %s' % (kind_text, core.human_size(size)))
+        self.pv_path.set_text(core.display(os.path.join(folder, name)))
+        name_m, dir_m = core.highlight_row(shown, core.short_dir(core.display(folder)), self.clauses)
+        hit = ('pv_hit_both' if '<mark>' in name_m and '<mark>' in dir_m else 'pv_hit_name' if '<mark>' in name_m
+               else 'pv_hit_path' if '<mark>' in dir_m else None)
+        self.pv_values['pv_size'].set_text('—' if is_dir else core.human_size(size))
+        self.pv_values['pv_modified'].set_text(core.human_time(mtime) or '—')
+        self.pv_values['pv_type'].set_text(kind_text)
+        self.pv_values['pv_hit'].set_text(t(lang, hit) if hit else '—')
+        self.pv_keys.set_text('\n'.join('%s  %s' % (self.accel_label(self.keys.get(a)) or fallback, t(lang, label))
+                                         for a, fallback, label in (('open', 'Enter', 'open'),
+                                                                    ('locate', '', 'open_folder'),
+                                                                    ('copy_path', '', 'copy_path'),
+                                                                    ('copy_file', '', 'copy_file'))
+                                         if self.keys.get(a) or fallback))
+
+    def accel_label(self, accel):
+        if not accel:
+            return ''
+        keyval, mods = Gtk.accelerator_parse(accel)
+        return Gtk.accelerator_get_label(keyval, mods) if keyval else accel
+
+    def key_label(self, action):
+        return self.accel_label(self.keys.get(action)) if hasattr(self, 'keys') else ''
+
+    def update_empty(self):
+        """Start hint (no text), no match, or loading over the list area; buttons work."""
+        st = self.index.state
+        booting = st in ('empty', 'loading') or (st == 'scanning' and not self.index.count())
+        kind = None
+        if self.expanded:
+            if booting and not self.count():
+                kind = 'booting'
+            elif not self.query:
+                kind = 'start'
+            elif self.result is not None and not self.count():
+                kind = ('nomatch', self.query, self.type, self.scope)
+        self.empty.set_visible(kind is not None)
+        if kind == self.empty_kind:
+            return
+        self.empty_kind = kind
+        for child in self.empty_buttons.get_children():
+            self.empty_buttons.remove(child)
+        if kind is None:
+            return
+        lang = self.lang
+        self.empty_spinner.set_visible(kind == 'booting')
+        self.empty_icon.set_visible(kind != 'booting')
+        self.empty_text.set_visible(kind != 'booting')
+        if kind == 'booting':
+            self.empty_spinner.start()
+            self.empty_title.set_text(t(lang, 'empty_loading'))
+            return
+        self.empty_spinner.stop()
+
+        def button(label, cb):
+            b = Gtk.Button(label=label)
+            b.connect('clicked', lambda *_: cb())
+            self.empty_buttons.pack_start(b, False, False, 0)
+            b.show()
+
+        if kind == 'start':
+            self.empty_icon.set_from_icon_name('edit-find-symbolic', Gtk.IconSize.DIALOG)
+            self.empty_title.set_text(t(lang, 'empty_start_title'))
+            self.empty_text.set_text(t(lang, 'empty_start_desc'))
+            for q in ('报告', 'ext:pdf;docx', 'path:2026'):
+                button(q, lambda q=q: self.entry.set_text(q))
+            return
+        q = self.query if len(self.query) <= 24 else self.query[:24] + '…'
+        self.empty_icon.set_from_icon_name('action-unavailable-symbolic', Gtk.IconSize.DIALOG)
+        self.empty_title.set_text(t(lang, 'empty_nomatch_title', q=q))
+        if self.type != 'all' or self.scope:
+            what = core.short_dir(core.display(self.scope)) if self.scope else t(lang, 'cat_' + self.type)
+            n = (self.facets or {}).get(self.type, 0)
+            self.empty_text.set_text(t(lang, 'empty_filtered_desc', type=what, count='{:,}'.format(n)))
+            button(t(lang, 'btn_clear_filter'), lambda: self.set_filter(type_='all', scope=''))
+        else:
+            self.empty_text.set_text(t(lang, 'empty_nomatch_desc'))
+        button(t(lang, 'btn_clear_search'), lambda: (self.entry.set_text(''), self.entry.grab_focus()))
+        button(t(lang, 'btn_show_syntax'), self.open_keys)
+
+    def open_keys(self):
+        """Shortcuts and the search syntax; an example can be clicked to search it."""
+        if self.keys_dialog is not None:
+            self.keys_dialog.present()
+            return self.keys_dialog
+        lang = self.lang
+        d = self.keys_dialog = Gtk.Dialog(title=t(lang, 'keys_title'), transient_for=self.win, modal=True,
+                                          destroy_with_parent=True)
+        d.set_default_size(680, -1)
+        d.add_button(t(lang, 'ok'), Gtk.ResponseType.CLOSE)
+        d.connect('response', lambda dlg, _r: dlg.destroy())
+        d.connect('destroy', lambda *_: (setattr(self, 'keys_dialog', None), self.entry.grab_focus()))
+        grid = Gtk.Grid(column_spacing=28, row_spacing=4)
+        for side in ('start', 'end', 'top', 'bottom'):
+            getattr(grid, 'set_margin_' + side)(14)
+        d.get_content_area().pack_start(grid, True, True, 0)
+        keys = Gtk.Grid(column_spacing=16, row_spacing=6)
+        r = 0
+        groups = ((t(lang, 'keys_group_search'), (('↓ ↑', t(lang, 'keys_select')), ('PgDn PgUp', t(lang, 'keys_page')),
+                                                  ('Enter', t(lang, 'open')), (self.key_label('locate'), t(lang, 'open_folder')),
+                                                  (self.key_label('copy_file'), t(lang, 'copy_file')),
+                                                  (self.key_label('copy_path'), t(lang, 'copy_path')),
+                                                  ('Esc', t(lang, 'keys_esc')))),
+                  (t(lang, 'keys_group_list'), (('Home End', t(lang, 'keys_first_last')),
+                                                ('Shift+F10', t(lang, 'keys_menu')), ('Esc', t(lang, 'keys_back')))),
+                  (t(lang, 'keys_group_global'), ((self.key_label('rescan'), t(lang, 'rescan')),
+                                                  (self.key_label('settings'), t(lang, 'settings')),
+                                                  (self.key_label('focus'), t(lang, 'key_focus')),
+                                                  ('?', t(lang, 'keys_panel')))))
+        for title, items in groups:
+            head = Gtk.Label(xalign=0)
+            head.set_markup('<b>%s</b>' % esc(title))
+            keys.attach(head, 0, r, 2, 1)
+            r += 1
+            for k, what in items:
+                if not k:
+                    continue
+                keys.attach(Gtk.Label(label=what, xalign=0, hexpand=True), 0, r, 1, 1)
+                kl = Gtk.Label(xalign=1)
+                kl.set_markup('<tt>%s</tt>' % esc(k))
+                keys.attach(kl, 1, r, 1, 1)
+                r += 1
+        grid.attach(keys, 0, 0, 1, 1)
+        syn = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        head = Gtk.Label(xalign=0)
+        head.set_markup('<b>%s</b>' % esc(t(lang, 'syn_title')))
+        syn.pack_start(head, False, False, 0)
+        self.syntax_buttons = []
+        for q, what in self.syntax():
+            b = Gtk.Button()
+            b.set_relief(Gtk.ReliefStyle.NONE)
+            lab = Gtk.Label(xalign=0)
+            lab.set_markup('<tt>%s</tt>   %s' % (esc(q), esc(what)))
+            lab.set_line_wrap(True)
+            b.add(lab)
+            b.get_accessible().set_name('%s %s' % (what, q))
+            b.connect('clicked', lambda _b, q=q: (d.destroy(), self.entry.set_text(q), self.entry.set_position(-1)))
+            syn.pack_start(b, False, False, 0)
+            self.syntax_buttons.append((q, b))
+        grid.attach(syn, 1, 0, 1, 1)
+        d.show_all()
+        if self.syntax_buttons:
+            self.syntax_buttons[0][1].grab_focus()
+        return d
+
+    def syntax(self):
+        lang = self.lang
+        first = t(lang, 'syn_multi') if self.index.config.match_path() else t(lang, 'syn_names')
+        return (('报告 2026', first), ('报告|周报', t(lang, 'syn_or')), ('!草稿', t(lang, 'syn_not')),
+                ('*.pdf', t(lang, 'syn_glob')), ('ext:pdf;docx', t(lang, 'syn_ext')), ('path:项目', t(lang, 'syn_path')),
+                ('regex:^IMG_\\d+', t(lang, 'syn_regex')))
+
+    def toggle_theme(self):
+        """Switch to the theme's dark or light variant; remembered between runs."""
+        settings = Gtk.Settings.get_default()
+        dark = not settings.get_property('gtk-application-prefer-dark-theme')
+        settings.set_property('gtk-application-prefer-dark-theme', dark)
+        self.ui_state['dark'] = dark
+        self.save_ui_state()
+
+    def toggle_fold(self):
+        """Fold to the search box alone, or unfold."""
+        if self.expanded and not self.maximized:
+            self.folded_by_hand = True
+        else:
+            self.folded_by_hand = False
+        self.apply_layout()
+        self.entry.grab_focus_without_selecting()
+
+    def show_about(self):
+        self.alert(t(self.lang, 'about_text', version='v' + core.VERSION), '')
 
 
 class SettingsDialog:
@@ -2062,12 +2720,12 @@ class SettingsDialog:
         self.exclude = list(config.exclude)
         self.keys = load_keys(config)
         self.saved_toggle = self.keys['toggle']
-        self.order = window.column_order()
+        self.sort = (window.sort, window.desc)
         self.recording = None           # action whose shortcut is being recorded
         lang = self.lang
         d = self.dialog = Gtk.Dialog(title=t(lang, 'settings'), transient_for=window.win, modal=True,
                                      destroy_with_parent=True)
-        d.set_default_size(580, 680)
+        d.set_default_size(720, 560)
         d.add_button(t(lang, 'defaults'), self.RESTORE)
         d.add_button(t(lang, 'cancel'), Gtk.ResponseType.CANCEL)
         self.anyway = d.add_button(t(lang, 'save_anyway'), self.ANYWAY)
@@ -2075,14 +2733,32 @@ class SettingsDialog:
         d.set_default_response(Gtk.ResponseType.OK)
         d.connect('response', self.on_response)
         d.connect('key-press-event', self.on_key)
-        outer = Gtk.ScrolledWindow()
-        outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-        d.get_content_area().pack_start(outer, True, True, 0)
-        area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
-        outer.add(area)
-        for side in ('start', 'end', 'top', 'bottom'):
-            getattr(area, 'set_margin_' + side)(10)
+        # four pages: indexed folders, exclusions, search, upgrade
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.NONE)
+        switcher = Gtk.StackSwitcher(stack=self.stack)
+        switcher.set_halign(Gtk.Align.CENTER)
+        switcher.set_margin_top(8)
+        d.get_content_area().pack_start(switcher, False, False, 0)
+        d.get_content_area().pack_start(self.stack, True, True, 0)
 
+        def page(name, title):
+            outer = Gtk.ScrolledWindow()
+            outer.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            for side in ('start', 'end', 'top', 'bottom'):
+                getattr(box, 'set_margin_' + side)(12)
+            outer.add(box)
+            self.stack.add_titled(outer, name, title)
+            return box
+
+        area = page('roots', t(lang, 'set_roots'))
+        self.hidden = Gtk.CheckButton(label=t(lang, 'set_hidden'))
+        self.hidden.set_active(config.hidden)
+        area.pack_start(self.hidden, False, False, 0)
+        self.match_path = Gtk.CheckButton(label=t(lang, 'set_match_path'))
+        self.match_path.set_active(config.match_path())
+        area.pack_start(self.match_path, False, False, 0)
         area.pack_start(self.heading(t(lang, 'set_roots')), False, False, 0)
         self.roots_box = self.list_box()
         area.pack_start(self.scrolled(self.roots_box), True, True, 0)
@@ -2092,7 +2768,7 @@ class SettingsDialog:
         row.pack_start(b, False, False, 0)
         area.pack_start(row, False, False, 0)
 
-        area.pack_start(self.heading(t(lang, 'set_exclude')), False, False, 0)
+        area = page('exclude', t(lang, 'set_exclude'))
         self.exclude_box = self.list_box()
         area.pack_start(self.scrolled(self.exclude_box), True, True, 0)
         row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
@@ -2109,23 +2785,26 @@ class SettingsDialog:
         row.pack_start(b, False, False, 0)
         area.pack_start(row, False, False, 0)
 
-        self.hidden = Gtk.CheckButton(label=t(lang, 'set_hidden'))
-        self.hidden.set_active(config.hidden)
-        area.pack_start(self.hidden, False, False, 0)
-        self.match_path = Gtk.CheckButton(label=t(lang, 'set_match_path'))
-        self.match_path.set_active(config.match_path())
-        area.pack_start(self.match_path, False, False, 0)
-
-        area.pack_start(self.heading(t(lang, 'set_columns')), False, False, 0)
-        self.columns_box = self.list_box()
-        frame = Gtk.Frame()
-        frame.add(self.columns_box)
-        area.pack_start(frame, False, False, 0)
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        b = Gtk.Button(label=t(lang, 'col_defaults'))
-        b.connect('clicked', lambda *_: self.reset_columns())
-        row.pack_start(b, False, False, 0)
-        area.pack_start(row, False, False, 0)
+        area = page('search', t(lang, 'set_search'))
+        area.pack_start(self.heading(t(lang, 'set_sort')), False, False, 0)
+        self.sort_combo = Gtk.ComboBoxText()
+        for label in core.sort_labels(lang):
+            self.sort_combo.append_text(label)
+        self.sort_combo.set_halign(Gtk.Align.START)
+        self.sort_combo.get_accessible().set_name(t(lang, 'set_sort'))
+        area.pack_start(self.sort_combo, False, False, 0)
+        area.pack_start(self.heading(t(lang, 'set_syntax')), False, False, 0)
+        syn = Gtk.Grid(column_spacing=16, row_spacing=3)
+        for r, (q, what) in enumerate(window.syntax()):
+            code = Gtk.Label(xalign=0)
+            code.set_markup('<tt>%s</tt>' % esc(q))
+            code.set_selectable(True)
+            syn.attach(code, 0, r, 1, 1)
+            lab = Gtk.Label(label=what, xalign=0)
+            lab.set_line_wrap(True)
+            lab.get_style_context().add_class('dim-label')
+            syn.attach(lab, 1, r, 1, 1)
+        area.pack_start(syn, False, False, 0)
 
         area.pack_start(self.heading(t(lang, 'keys')), False, False, 0)
         grid = Gtk.Grid(column_spacing=8, row_spacing=4)
@@ -2156,7 +2835,7 @@ class SettingsDialog:
         self.copy_command.set_no_show_all(True)
         row.pack_start(self.copy_command, False, False, 0)
         area.pack_start(row, False, False, 0)
-        area.pack_start(self.heading(t(lang, 'set_upgrade')), False, False, 0)
+        area = page('upgrade', t(lang, 'set_upgrade'))
         hint = Gtk.Label(label=t(lang, 'upgrade_hint'), xalign=0)
         hint.set_line_wrap(True)
         hint.get_style_context().add_class('dim-label')
@@ -2182,7 +2861,7 @@ class SettingsDialog:
         d.get_content_area().pack_start(self.problems, False, False, 0)
         self.refill_upgrade()
         self.refill()
-        self.refill_columns()
+        self.refill_sort()
         self.refill_keys()
 
     def refill_upgrade(self):
@@ -2225,7 +2904,7 @@ class SettingsDialog:
         c = self.config
         return (core.tidy_scope(self.roots, self.exclude) != core.tidy_scope(c.roots, c.exclude)
                 or self.hidden.get_active() != c.hidden or self.match_path.get_active() != c.match_path()
-                or self.keys != load_keys(c) or list(self.order) != list(self.window.column_order()))
+                or self.keys != load_keys(c) or self.chosen_sort() != (self.window.sort, self.window.desc))
 
     def choose_upgrade(self, how):
         """A file chooser for the release zip or its unpacked folder; returns the path or None. Tests replace this."""
@@ -2329,58 +3008,21 @@ class SettingsDialog:
         self.roots, self.exclude = list(core.DEFAULT_ROOTS), list(core.DEFAULT_EXCLUDE)
         self.hidden.set_active(False)
         self.match_path.set_active(True)
-        self.order = list(DATA_COLUMNS)
+        self.sort = core.SORT_CHOICES[0]
         self.keys = dict(KEY_DEFAULTS, toggle=DEFAULT_TOGGLE)
         self.recording = None
         self.refill()
-        self.refill_columns()
+        self.refill_sort()
         self.refill_keys()
         self.update_problems([])
 
-    def reset_columns(self):
-        self.order = list(DATA_COLUMNS)
-        self.refill_columns()
+    def refill_sort(self):
+        k = next((i for i, c in enumerate(core.SORT_CHOICES) if c == tuple(self.sort)), 0)
+        self.sort_combo.set_active(k)
 
-    # column order
-
-    def refill_columns(self):
-        box = self.columns_box
-        for child in box.get_children():
-            box.remove(child)
-        last = len(self.order) - 1
-        for i, key in enumerate(self.order):
-            name = t(self.lang, 'col_' + key)
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            row.set_margin_start(6)
-            row.set_margin_end(2)
-            row.pack_start(Gtk.Label(label=name, xalign=0), True, True, 0)
-            for label, item, step, ok in (('col_up', 'col_up_item', -1, i > 0),
-                                          ('col_down', 'col_down_item', 1, i < last)):
-                b = Gtk.Button(label=t(self.lang, label))
-                b.set_relief(Gtk.ReliefStyle.NONE)
-                b.set_sensitive(ok)
-                b.get_accessible().set_name(t(self.lang, item, col=name))
-                b.connect('clicked', lambda _b, k=i, d=step: self.move_column(k, d))
-                row.pack_start(b, False, False, 0)
-            box.add(row)
-        box.show_all()
-
-    def move_column(self, k, step):
-        j = k + step
-        if 0 <= k < len(self.order) and 0 <= j < len(self.order):
-            self.order[k], self.order[j] = self.order[j], self.order[k]
-            self.refill_columns()
-            # keep the keyboard on the moved column's button in its new row
-            row = self.columns_box.get_row_at_index(j)
-            if row is not None:
-                buttons = [w for w in row.get_child().get_children() if isinstance(w, Gtk.Button)]
-                target = buttons[0] if step < 0 else buttons[1]
-                if not target.get_sensitive():
-                    target = buttons[1] if step < 0 else buttons[0]
-                target.grab_focus()
-
-
-    # shortcuts
+    def chosen_sort(self):
+        k = self.sort_combo.get_active()
+        return core.SORT_CHOICES[k] if 0 <= k < len(core.SORT_CHOICES) else core.SORT_CHOICES[0]
 
     def key_label(self, accel):
         if not accel:
@@ -2508,8 +3150,13 @@ class SettingsDialog:
         ok = self.window.save_config(new) if same_scope else self.window.apply_scope(new)
         if not ok:
             return 'blocked'
-        self.window.set_column_order(self.order)
-        if same_scope and new.match_path() != self.config.match_path():
+        sort = self.chosen_sort()
+        if sort != (self.window.sort, self.window.desc):
+            self.window.sort, self.window.desc = sort
+            self.window.update_sort_label()
+            if same_scope:
+                self.window.run_search(keep=True)
+        elif same_scope and new.match_path() != self.config.match_path():
             self.window.run_search(keep=True)
         self.window.apply_keys(self.keys)
         if toggle != self.saved_toggle:
