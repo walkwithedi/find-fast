@@ -2120,7 +2120,7 @@ def _ranges(text, clauses):
                 for a, b in spans:
                     if 0 <= a < b <= len(text) and low[a:b] == (t.head if a == 0 else t.tail).lower():
                         out.append((a, b))
-            elif name == 'PatternTerm':
+            elif getattr(t, 'rx', None) is not None:
                 if getattr(t, 'rx', None) is not None:
                     for m in t.rx.finditer(text):
                         if m.end() > m.start():
@@ -2131,14 +2131,8 @@ def _ranges(text, clauses):
                         out.append((len(text) - len(suf), len(text)))
                         break
             elif getattr(t, 's', None):
-                start = 0
-                s = t.s.lower()
-                while True:
-                    i = low.find(s, start)
-                    if i < 0:
-                        break
-                    out.append((i, i + len(s)))
-                    start = i + len(s)
+                for match in re.finditer(re.escape(t.s), text, re.IGNORECASE):
+                    out.append((match.start(), match.end()))
     return out
 
 
@@ -2174,13 +2168,16 @@ def highlight(text, clauses, mode='html', mark_bg=None, mark_fg=None):
     return ''.join(parts)
 
 
-def highlight_row(name, dir_display, clauses):
-    name_html = highlight(name, clauses)
-    marked = {name[a:b].lower() for a, b in _merge(_ranges(name, clauses))}
-    rest = [c for c in clauses if not (not c.negate and any(
-        (getattr(t, 's', '') or '').lower() in marked for t in c.alts))]
-    dir_html = highlight(dir_display, rest) if rest else _esc(dir_display, 'html')
-    return name_html, dir_html
+def highlight_row(name, dir_display, clauses, mode='html', mark_bg=None, mark_fg=None):
+    name_markup = highlight(name, clauses, mode, mark_bg, mark_fg)
+    rest = []
+    for clause in clauses:
+        if clause.negate:
+            continue
+        alts = [term for term in clause.alts if not _ranges(name, [Clause([term])])]
+        if alts:
+            rest.append(Clause(alts))
+    return name_markup, highlight(dir_display, rest, mode, mark_bg, mark_fg)
 
 
 def short_dir(folder, levels=2):

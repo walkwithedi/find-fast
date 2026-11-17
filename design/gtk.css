@@ -149,7 +149,7 @@ button.sortbtn:hover { background-color: @surface2; border-color: @line; color: 
 treeview.find-fast-rows {
   background-color: @surface;
   color: @ink;
-  padding: 6px 0;
+  padding: 0;
 }
 treeview.find-fast-rows:selected,
 treeview.find-fast-rows .view:selected {

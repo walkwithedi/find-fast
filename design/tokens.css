@@ -128,7 +128,7 @@
 }
 
 /* 焦点环：唯一写法，不许各组件自定义 outline 颜色 */
-:where(button, [role="option"], input, select, a):focus-visible{
+:where(button, [role="option"], [role="listbox"], [role="button"], input, select, a, summary):focus-visible{
   outline:2px solid var(--accent);
   outline-offset:1px;
 }

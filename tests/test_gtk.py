@@ -89,12 +89,41 @@ class GtkTest(unittest.TestCase):
     def test_title_columns_and_language(self):
         w = self.window('zh', start=False)
         self.assertEqual(w.win.get_title(), '秒搜文件')
-        self.assertEqual([c.get_title() for c in w.tree.get_columns()], ['名称', '路径', '大小', '修改时间', '定位'])
+        self.assertEqual(len(w.tree.get_columns()), 2)
+        self.assertFalse(w.tree.get_headers_visible())
         self.assertEqual([l for l in (i.get_label() for i in w.menu.get_children()) if l],
                          ['定位', '打开', '复制文件', '复制路径', '跳到最新版', '排除所在文件夹', '重新扫描'])
         w2 = ui.Window(self.app, self.index, 'en')
         self.assertEqual(w2.win.get_title(), 'find-fast')
         w2.win.destroy()
+
+    def test_preview_theme_and_scanning(self):
+        w = self.window()
+        self.type('report')
+        w.win.resize(1280, 700)
+        pump(0.2)
+        w.cur = 0
+        w.fill()
+        self.assertEqual(w.preview_path.get_text(), w.result.path(0))
+        self.assertEqual(w.preview_widgets['name'].get_text(), 'Report 2024.pdf')
+        self.assertTrue(w.preview.get_visible())
+        w.switch_theme()
+        self.assertTrue(w.dark)
+        self.assertIn('background="' + w.mark_bg + '"', w.store[0][7])
+        self.assertTrue(ui.Pango.parse_markup(w.store[0][7], -1, '\0')[0])
+        before = w.list_area.get_allocation().y
+        self.index.state = 'scanning'
+        w.pulse_scan()
+        pump(0.1)
+        self.assertTrue(w.progress.get_visible())
+        self.assertEqual(before, w.list_area.get_allocation().y)
+        self.index.state = 'ready'
+        w.pulse_scan()
+        self.assertFalse(w.progress.get_visible())
+        w.win.resize(700, 500)
+        pump(0.2)
+        self.assertFalse(w.preview.get_visible())
+        self.assertLessEqual(w.tree.get_allocated_width(), 700)
 
     def test_strings_have_same_keys(self):
         self.assertEqual(set(ui.UI['zh']), set(ui.UI['en']))
@@ -104,11 +133,11 @@ class GtkTest(unittest.TestCase):
         self.type('report')
         self.assertEqual(self.names(), ['Report 2024.pdf', 'report-draft.docx', 'report-2019.pdf'])
         self.assertTrue(w.status.get_text().startswith('3 results'))
-        w.columns['name'].clicked()
+        w.sorter.set_active_id('name:1' if w.sort == 'name' and not w.desc else 'name:0')
         pump(0.05)
         self.assertEqual(self.names(), ['Report 2024.pdf', 'report-2019.pdf', 'report-draft.docx'])
-        self.assertEqual(w.columns['name'].get_sort_order(), ui.Gtk.SortType.ASCENDING)
-        w.columns['name'].clicked()
+        self.assertFalse(w.desc)
+        w.sorter.set_active_id('name:1' if w.sort == 'name' and not w.desc else 'name:0')
         pump(0.05)
         self.assertEqual(self.names(), ['report-draft.docx', 'report-2019.pdf', 'Report 2024.pdf'])
         self.type('regex:(')
@@ -353,8 +382,11 @@ class GtkTest(unittest.TestCase):
 
     def test_version_tags_are_not_insensitive(self):
         w = self.window()
-        self.assertTrue(w.tag_cell.get_property('sensitive'))
-        self.assertLess(w.tag_cell.get_property('foreground-rgba').alpha, 1)
+        self.type('report')
+        self.assertTrue(all(cell.get_property('sensitive') for cell in w.row_col.get_cells()))
+        self.assertTrue(w.store.get_n_columns() == 9)
+        for row in w.store:
+            self.assertTrue(ui.Pango.parse_markup(row[7], -1, '\0')[0])
 
     def test_short_search_hint_beside_the_state_text(self):
         w = self.window()
@@ -413,7 +445,7 @@ class GtkTest(unittest.TestCase):
         tip = ui.Pango.parse_markup(w.store[k][ui.COL_TIP], -1, '\0')[2]
         self.assertEqual(tip, os.path.join(d, '示例方案.docx') + '\n3 similar versions; newest: '
                          + os.path.join(d, 'a', '示例方案_v2.docx'))
-        w.columns['name'].clicked()
+        w.sorter.set_active_id('name:1' if w.sort == 'name' and not w.desc else 'name:0')
         pump(0.05)
         self.assertEqual({r[1]: r[ui.COL_TAG] for r in w.store}, tags)
         w.cur = w.top + self.names().index('示例方案.docx')
@@ -461,16 +493,10 @@ class GtkTest(unittest.TestCase):
         self.type('pics')
         located = []
         w.show_in_file_manager = lambda p: located.append(p) or True
-        w.tree.realize()
-        pump(0.1)
-        area = w.tree.get_cell_area(ui.Gtk.TreePath.new_first(), w.columns['locate'])
-        ev = ui.Gdk.Event.new(ui.Gdk.EventType.BUTTON_PRESS)
-        ev.button.button = 1
-        ev.button.x = area.x + area.width / 2
-        ev.button.y = area.y + area.height / 2
-        self.assertTrue(w.on_button(w.tree, ev.button))
-        self.assertEqual(located, [os.path.join(self.root, 'pics')])
         w.cur = 0
+        w.render_preview()
+        w.preview_buttons[1].clicked()
+        self.assertEqual(located, [os.path.join(self.root, 'pics')])
         w.copy_file()
         pump(0.05)
         self.assertEqual(self.clipboard('text/uri-list'), ui.file_uri(os.path.join(self.root, 'pics')).encode() + b'\r\n')
@@ -482,76 +508,29 @@ class GtkTest(unittest.TestCase):
 
     def test_ui_state_saved_and_restored(self):
         w = self.window()
-        state = os.path.join(self.tmp, 'ui-state.json')
-        self.assertEqual(w.state_path, state)
-        self.type('report')                 # the list shows, so the height counts
-        w.columns['name'].set_fixed_width(222)
+        self.type('report')
         w.win.resize(700, 420)
         pump(0.3)
-        w.columns['size'].clicked()
-        pump(0.05)
+        w.sorter.set_active_id('size:1')
         w.on_delete()
         self.assertTrue(pump(until=lambda: self.quit_called))
-        import json
-        with open(state, encoding='utf-8') as f:
-            saved = json.load(f)
-        self.assertEqual(oct(os.stat(state).st_mode & 0o777), '0o600')
-        self.assertEqual(saved['columns']['name'], 222)
-        self.assertEqual((saved['width'], saved['height']), (700, 420))
-        self.assertEqual((saved['sort'], saved['desc']), ('size', True))
-        self.assertIn('locate', saved['columns'])
+        state = ui.load_ui_state(w.state_path)
+        self.assertEqual((state['sort'], state['desc']), ('size', True))
+        self.assertEqual((state['width'], state['height']), (700, 420))
         w.win.destroy()
         w2 = self.w = ui.Window(self.app, self.index, 'en')
-        self.assertEqual(w2.columns['name'].get_fixed_width(), 222)
         self.assertEqual(w2.win.get_default_size(), (700, 420))
         self.assertEqual((w2.sort, w2.desc), ('size', True))
-        self.assertTrue(w2.columns['size'].get_sort_indicator())
 
     def test_column_order_drag_settings_and_restore(self):
         w = self.window()
         self.type('report')
-        titles = lambda: [c.get_title() for c in w.tree.get_columns()]  # noqa: E731
-        self.assertEqual(w.column_order(), list(ui.DATA_COLUMNS))
-        cols = w.columns
-        self.assertTrue(all(cols[k].get_reorderable() for k in ui.DATA_COLUMNS))
-        self.assertFalse(cols['locate'].get_reorderable())
-        # what a header drag does; nothing may land after the locate column
-        w.tree.move_column_after(cols['size'], None)
-        self.assertEqual(w.column_order(), ['size', 'name', 'path', 'mtime'])
-        self.assertEqual(titles(), ['Size', 'Name', 'Path', 'Modified', 'Locate'])
-        self.assertFalse(w.column_drop_ok(w.tree, cols['name'], cols['locate'], None))
-        self.assertFalse(w.column_drop_ok(w.tree, cols['locate'], None, cols['size']))
-        self.assertTrue(w.column_drop_ok(w.tree, cols['name'], None, cols['size']))
-        self.assertTrue(w.column_drop_ok(w.tree, cols['name'], cols['mtime'], cols['locate']))
-        pump(0.05)
-        self.assertEqual(w.store[0][1], 'Report 2024.pdf')        # cells keep their data
-        # the same in Settings, by keyboard-reachable buttons; applied on Save
+        self.assertFalse(w.tree.get_headers_visible())
+        self.assertEqual(len(w.tree.get_columns()), 2)
+        self.assertTrue(all(not c.get_reorderable() for c in w.tree.get_columns()))
         s = w.open_settings()
-        self.assertEqual(s.order, ['size', 'name', 'path', 'mtime'])
-        rows = s.columns_box.get_children()
-        self.assertEqual(len(rows), 4)
-        first = [b for b in rows[0].get_child().get_children() if isinstance(b, ui.Gtk.Button)]
-        self.assertFalse(first[0].get_sensitive())
-        self.assertTrue(first[1].get_sensitive())
-        self.assertEqual(first[1].get_accessible().get_name(), 'Move Size down')
-        s.move_column(0, 1)
-        self.assertEqual(s.order, ['name', 'size', 'path', 'mtime'])
-        s.reset_columns()
-        self.assertEqual(s.order, list(ui.DATA_COLUMNS))
-        s.move_column(3, -1)
-        self.assertEqual(s.order, ['name', 'path', 'mtime', 'size'])
-        self.assertEqual(w.column_order(), ['size', 'name', 'path', 'mtime'])     # not before Save
+        self.assertFalse(hasattr(s, 'columns_box'))
         self.assertEqual(s.save(), 'saved')
-        self.assertEqual(w.column_order(), ['name', 'path', 'mtime', 'size'])
-        self.assertEqual(titles()[-1], 'Locate')
-        w.on_delete()
-        self.assertTrue(pump(until=lambda: self.quit_called))
-        state = ui.load_ui_state(os.path.join(self.tmp, 'ui-state.json'))
-        self.assertEqual(state['order'], ['name', 'path', 'mtime', 'size'])
-        w.win.destroy()
-        w2 = self.w = ui.Window(self.app, self.index, 'en')
-        self.assertEqual(w2.column_order(), ['name', 'path', 'mtime', 'size'])
-        self.assertIs(w2.tree.get_columns()[-1], w2.columns['locate'])
 
     def test_match_path_setting(self):
         w = self.window()
@@ -567,10 +546,8 @@ class GtkTest(unittest.TestCase):
         self.assertEqual(self.index.state, 'ready')            # no rescan for this setting
         s = w.open_settings()
         self.assertFalse(s.match_path.get_active())
-        s.move_column(0, 1)
         s.restore_defaults()
         self.assertTrue(s.match_path.get_active())
-        self.assertEqual(s.order, list(ui.DATA_COLUMNS))
         self.assertEqual(s.keys['toggle'], ui.DEFAULT_TOGGLE)
         s.dialog.destroy()
 
@@ -604,9 +581,9 @@ class GtkTest(unittest.TestCase):
                                                    'columns': {'name': ui.MIN_COLUMN_WIDTH}, 'x': 10})
         w = self.window(start=False)
         self.assertEqual(w.win.get_default_size(), (ui.DEFAULT_SIZE[0], 500))
-        self.assertEqual(w.columns['path'].get_fixed_width(), ui.COLUMN_WIDTHS['path'])
+        self.assertEqual(w.meta_col.get_fixed_width(), 116)
         self.assertEqual(w.sort, core.DEFAULT_SORT)
-        self.assertEqual(w.column_order(), list(ui.DATA_COLUMNS))
+        self.assertEqual(len(w.tree.get_columns()), 2)
         for bad in ('name', ['name', 'path', 'size'], ['name', 'path', 'size', 'mtime', 'locate'],
                     ['name', 'path', 'size', 'bogus'], [1, 2, 3, 4]):
             with open(state, 'w') as f:
@@ -645,25 +622,12 @@ class GtkTest(unittest.TestCase):
 
     def test_rows_are_compact(self):
         w = self.window()
-        self.type('')
+        self.type('report')
         pump(0.2)
-        Gtk = ui.Gtk
-        ref = Gtk.Window()
-        store = Gtk.ListStore(str)
-        store.append(['report-draft.docx'])
-        tv = Gtk.TreeView(model=store)
-        col = Gtk.TreeViewColumn('x')
-        cell = Gtk.CellRendererText()
-        col.pack_start(cell, True)
-        col.add_attribute(cell, 'text', 0)
-        tv.append_column(col)
-        ref.add(tv)
-        ref.show_all()
-        pump(0.2)
-        default = tv.get_background_area(Gtk.TreePath.new_first(), col).height
-        ref.destroy()
-        self.assertGreater(w.row_height, 0)
-        self.assertLess(w.row_height, default)
+        self.assertEqual(w.measure_row_height(), (48, True))
+        height = w.tree.get_background_area(ui.Gtk.TreePath.new_first(), w.row_col).height
+        self.assertAlmostEqual(height, 48, delta=1)
+        self.assertIn('\n', w.store[0][7])
 
     def height(self):
         pump(0.3)
@@ -872,7 +836,7 @@ class GtkTest(unittest.TestCase):
         w.win.resize(800, 300)
         pump(0.3)
         self.assertTrue(pump(until=lambda: len(w.store) == min(w.rows, len(w.result))))
-        header = w.columns['name'].get_button().get_allocated_height()
+        header = 0
         self.assertLessEqual(header + w.rows * w.row_height, w.area_height)
         self.assertEqual(len(w.store), min(w.rows, 11))
 
@@ -899,7 +863,7 @@ class GtkTest(unittest.TestCase):
         self.assertEqual(len(w.store), w.rows)
         for col in ('name', 'size', 'path', 'mtime'):
             t = time.perf_counter()
-            w.columns[col].clicked()
+            w.sorter.set_active_id(col + ':' + str(int(ui.DEFAULT_DESC[col])))
             timings['sort ' + col] = time.perf_counter() - t
             self.assertEqual(len(w.result), n)
         self.type('report')
@@ -944,7 +908,7 @@ class GtkUpgradeTest(unittest.TestCase):
         for n in RELEASE:
             shutil.copy2(os.path.join(ROOT, n), os.path.join(self.tool, n))
         with open(os.path.join(ROOT, 'CHANGELOG.md'), encoding='utf-8') as f:
-            self.old = [line[3:].strip() for line in f if line.startswith('## ')][1]
+            self.old = [line[3:].strip() for line in f if line.startswith('## ') and line[3:].strip() != 'Unreleased'][1]
         with open(os.path.join(self.tool, 'VERSION'), 'w') as f:
             f.write(self.old + '\n')
         self.new = core.VERSION

@@ -654,6 +654,10 @@ def t(_lang, _name, **kw):
     return table.get(_name, UI['en'][_name]).format(**kw)
 
 
+# Generated from design/tokens.json and design/gtk.css; keep these assets in sync.
+THEME_COLORS = {'light': {'bg': '#e9edf1', 'surface': '#ffffff', 'surface-2': '#f7f9fa', 'surface-3': '#eef1f4', 'hover': '#f4f7fa', 'sel': '#eff4ff', 'sel-line': '#2f55d4', 'ink': '#14181d', 'ink-2': '#4b5563', 'ink-3': '#66717e', 'line': '#e5e9ed', 'line-2': '#d3dae1', 'accent': '#2f55d4', 'accent-solid': '#2f55d4', 'on-accent': '#ffffff', 'accent-ink': '#22409e', 'accent-soft': '#ecf0fc', 'ok': '#0b6b4f', 'ok-soft': '#e7f4ee', 'warn': '#8a5a00', 'bad': '#b3261e', 'mark-bg': '#ffe9a8', 'mark-fg': 'inherit', 'ico-folder': '#9a6f16'}, 'dark': {'bg': '#0a0c0f', 'surface': '#14181d', 'surface-2': '#191e24', 'surface-3': '#1f252c', 'hover': '#1d232a', 'sel': '#1b2436', 'sel-line': '#8aa2ff', 'ink': '#e8edf2', 'ink-2': '#9aa6b3', 'ink-3': '#7f8a97', 'line': '#252b32', 'line-2': '#333b44', 'accent': '#8aa2ff', 'accent-solid': '#4a67e8', 'on-accent': '#ffffff', 'accent-ink': '#b9c6ff', 'accent-soft': '#1c2434', 'ok': '#63d3a3', 'ok-soft': '#12241d', 'warn': '#e0b25c', 'bad': '#ff8f86', 'mark-bg': 'rgba(255,201,80,.18)', 'mark-fg': '#ffd98a', 'ico-folder': '#d9a94a'}}
+THEME_CSS = "/* ============================================================================\n   秒搜文件 · GTK3 样式（参考实现）\n   ----------------------------------------------------------------------------\n   用法：由 Python 在启动时读入并注入，深浅两套只替换顶部 @define-color 块。\n       provider = Gtk.CssProvider()\n       provider.load_from_data(css_text.encode('utf-8'))\n       Gtk.StyleContext.add_provider_for_screen(\n           Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)\n   深色：Gtk.Settings.get_default().set_property('gtk-application-prefer-dark-theme', True)\n        并把下面 [深色] 段的取值替换进 @define-color。\n\n   GTK3 没有 CSS 变量，只有 @define-color；不支持 calc()、gap、grid。\n   行内布局由 Gtk.Box / Gtk.Grid 负责，这里只给颜色、字号、内边距、圆角。\n   ============================================================================ */\n\n/* —— 浅色 —— */\n@define-color bg            #e9edf1;\n@define-color surface       #ffffff;\n@define-color surface2      #f7f9fa;\n@define-color surface3      #eef1f4;\n@define-color hover         #f4f7fa;\n@define-color sel           #eff4ff;\n@define-color sel_line      #2f55d4;\n@define-color ink           #14181d;\n@define-color ink2          #4b5563;\n@define-color ink3          #66717e;\n@define-color line          #e5e9ed;\n@define-color line2         #d3dae1;\n@define-color accent        #2f55d4;\n@define-color accent_solid  #2f55d4;\n@define-color on_accent     #ffffff;\n@define-color accent_ink    #22409e;\n@define-color accent_soft   #ecf0fc;\n@define-color ok            #0b6b4f;\n@define-color warn          #8a5a00;\n@define-color bad           #b3261e;\n@define-color ico_folder    #9a6f16;\n\n/* —— 深色（替换上面同名色） ——\n@define-color bg            #0a0c0f;\n@define-color surface       #14181d;\n@define-color surface2      #191e24;\n@define-color surface3      #1f252c;\n@define-color hover         #1d232a;\n@define-color sel           #1b2436;\n@define-color sel_line      #8aa2ff;\n@define-color ink           #e8edf2;\n@define-color ink2          #9aa6b3;\n@define-color ink3          #7f8a97;\n@define-color line          #252b32;\n@define-color line2         #333b44;\n@define-color accent        #8aa2ff;\n@define-color accent_solid  #4a67e8;\n@define-color on_accent     #ffffff;\n@define-color accent_ink    #b9c6ff;\n@define-color accent_soft   #1c2434;\n@define-color ok            #63d3a3;\n@define-color warn          #e0b25c;\n@define-color bad           #ff8f86;\n@define-color ico_folder    #d9a94a;\n*/\n\n/* —— 窗口 —— */\nwindow.find-fast,\nwindow.find-fast .background {\n  background-color: @surface;\n  color: @ink;\n}\n\n/* —— 搜索框：44px，圆角 12，聚焦时描边 2px 强调色 —— */\nentry.search,\nsearchbar entry {\n  min-height: 44px;\n  padding: 0 10px 0 12px;\n  border: 1px solid @line2;\n  border-radius: 12px;\n  background-color: @surface2;\n  color: @ink;\n  font-size: 15.5px;\n  box-shadow: none;\n}\nentry.search:hover { border-color: @ink3; }\nentry.search:focus {\n  border-color: @accent;\n  background-color: @surface;\n  box-shadow: 0 0 0 3px alpha(@accent, 0.16);\n}\n\n/* —— 扫描进度：2px，只显示不占位（放进 Gtk.Overlay 底部对齐） —— */\nprogressbar.scan {\n  min-height: 2px;\n  min-width: 2px;\n  border: none;\n  border-radius: 0;\n  background-color: transparent;\n}\nprogressbar.scan trough {\n  min-height: 2px;\n  border: none;\n  border-radius: 0;\n  background-color: alpha(@accent, 0.12);\n}\nprogressbar.scan progress {\n  min-height: 2px;\n  border: none;\n  border-radius: 0;\n  background-color: @accent;\n}\n\n/* —— 筛选 chip：28px，圆角 6 —— */\nbutton.chip {\n  min-height: 28px;\n  padding: 0 10px;\n  border: 1px solid @line;\n  border-radius: 6px;\n  background-image: none;\n  background-color: @surface;\n  color: @ink2;\n  font-size: 12.5px;\n  box-shadow: none;\n  text-shadow: none;\n}\nbutton.chip:hover { background-color: @surface2; border-color: @line2; color: @ink; }\nbutton.chip:checked,\nbutton.chip.active {\n  background-image: none;\n  background-color: @accent_soft;\n  border-color: alpha(@accent, 0.4);\n  color: @accent_ink;\n  font-weight: 500;\n}\nbutton.chip:disabled { color: @ink3; opacity: 0.45; }\n\n/* —— 排序按钮（与 chip 同高，无边框） —— */\nbutton.sortbtn {\n  min-height: 28px;\n  padding: 0 9px;\n  border: 1px solid transparent;\n  border-radius: 6px;\n  background-image: none;\n  background-color: transparent;\n  color: @ink2;\n  font-size: 12.5px;\n  box-shadow: none;\n}\nbutton.sortbtn:hover { background-color: @surface2; border-color: @line; color: @ink; }\n\n/* —— 结果列表：行高 48，选中 3px 左侧标记 —— */\ntreeview.find-fast-rows {\n  background-color: @surface;\n  color: @ink;\n  padding: 0;\n}\ntreeview.find-fast-rows:selected,\ntreeview.find-fast-rows .view:selected {\n  background-color: @sel;\n  color: @ink;\n}\ntreeview.find-fast-rows:hover { background-color: @hover; }\n\n/* —— 详情面板：340px，左侧 1px 分隔 —— */\nbox.preview {\n  background-color: @surface2;\n  border-left: 1px solid @line;\n  padding: 16px;\n}\nbox.preview label.pv-name { font-size: 14px; font-weight: 600; color: @ink; }\nbox.preview label.pv-kind,\nbox.preview label.pv-key { font-size: 12.5px; color: @ink3; }\nbox.preview label.pv-val { font-size: 12.5px; color: @ink2; }\nbox.preview entry.pv-path {\n  min-height: 30px;\n  padding: 0 8px;\n  border: 1px solid @line;\n  border-radius: 6px;\n  background-color: @surface;\n  color: @ink2;\n  font-size: 12.5px;\n}\n\n/* —— 主按钮 / 次按钮 —— */\nbutton.pv-primary {\n  min-height: 34px;\n  border: 1px solid @accent_solid;\n  border-radius: 8px;\n  background-image: none;\n  background-color: @accent_solid;\n  color: @on_accent;\n  font-size: 13px;\n  font-weight: 500;\n  box-shadow: none;\n  text-shadow: none;\n}\nbutton.pv-primary:hover { background-color: shade(@accent_solid, 0.92); border-color: shade(@accent_solid, 0.92); }\nbutton.pv-secondary {\n  min-height: 34px;\n  border: 1px solid @line2;\n  border-radius: 8px;\n  background-image: none;\n  background-color: @surface;\n  color: @ink;\n  font-size: 12.5px;\n  box-shadow: none;\n}\nbutton.pv-secondary:hover { background-color: @surface3; }\n\n/* —— 状态栏：28px，单行 —— */\nbox.statusbar {\n  min-height: 28px;\n  padding: 0 14px;\n  background-color: @surface2;\n  border-top: 1px solid @line;\n}\nbox.statusbar label { font-size: 11.5px; color: @ink3; }\nbox.statusbar label.st-count { color: @ink2; }\n\n/* —— 空状态 —— */\nbox.empty-state { background-color: @surface; }\nbox.empty-state label.empty-title { font-size: 15px; font-weight: 600; color: @ink; }\nbox.empty-state label.empty-desc  { font-size: 13px; color: @ink2; }\nbox.empty-state image.empty-icon  { color: @ink3; }\n\n/* —— 对话框 —— */\ndialog.find-fast-dialog { background-color: @surface; }\ndialog.find-fast-dialog stackswitcher button { min-height: 28px; font-size: 12.5px; }\n"
+
 class Window:
     """The search window around an Index. Holds no GTK subclass so it can be built after gi is
     loaded lazily."""
@@ -697,14 +701,11 @@ class Window:
             dark = self.index.config.other.get('theme', settings.get_property('gtk-application-prefer-dark-theme'))
         self.dark = bool(dark)
         settings.set_property('gtk-application-prefer-dark-theme', self.dark)
-        here = os.path.dirname(os.path.abspath(__file__))
-        with open(os.path.join(here, 'design', 'tokens.json'), encoding='utf-8') as f:
-            colors = json.load(f)['color']['dark' if self.dark else 'light']
+        colors = THEME_COLORS['dark' if self.dark else 'light']
         self.ink3 = colors['ink-3']
         self.mark_bg = '#3a3320' if self.dark else colors['mark-bg']
         self.mark_fg = colors['mark-fg'] if self.dark else colors['ink']
-        with open(os.path.join(here, 'design', 'gtk.css'), encoding='utf-8') as f:
-            css = f.read()
+        css = THEME_CSS
         aliases = {'surface2': 'surface-2', 'surface3': 'surface-3', 'ink2': 'ink-2',
                    'ink3': 'ink-3', 'line2': 'line-2'}
         def color(m):
@@ -787,7 +788,7 @@ class Window:
         scan_overlay.set_overlay_pass_through(self.progress, True)
         box.pack_start(scan_overlay, False, False, 0)
         GLib.timeout_add(100, self.pulse_scan)
-        sorter = Gtk.ComboBoxText()
+        sorter = self.sorter = Gtk.ComboBoxText()
         for key, reverse in (('mtime', True), ('mtime', False), ('name', False), ('name', True), ('path', False), ('size', True), ('size', False)):
             sorter.append(key + ':' + str(int(reverse)), t(self.lang, 'col_' + key) + (' ↓' if reverse else ' ↑'))
         sorter.set_active_id(self.sort + ':' + str(int(self.desc)))
@@ -805,6 +806,7 @@ class Window:
         # icon name, name, folder, size, time, tooltip (Pango markup), similar-version tag
         self.store = Gtk.ListStore(str, str, str, str, str, str, str, str, str)
         tv = self.tree = Gtk.TreeView(model=self.store)
+        tv.get_style_context().add_class('find-fast-rows')
         tv.set_has_tooltip(True)
         tv.connect('query-tooltip', self.on_query_tooltip)
         tv.set_enable_search(False)
@@ -871,6 +873,8 @@ class Window:
         self.preview.set_size_request(340, -1)
         self.preview.set_no_show_all(True)
         row.pack_start(self.preview, False, False, 0)
+        self.preview_icon = Gtk.Image.new_from_icon_name('text-x-generic', Gtk.IconSize.DIALOG)
+        self.preview.pack_start(self.preview_icon, False, False, 0)
         self.preview_widgets = {}
         for key in ('name', 'type'):
             lab = Gtk.Label(xalign=0)
@@ -881,16 +885,32 @@ class Window:
         self.preview_path = Gtk.Entry()
         self.preview_path.set_editable(False)
         self.preview.pack_start(self.preview_path, False, False, 0)
-        self.preview_meta = Gtk.Label(xalign=0)
-        self.preview_meta.set_line_wrap(True)
+        self.preview_meta = Gtk.Grid(column_spacing=14, row_spacing=7)
+        self.preview_fields = []
+        for i in range(4):
+            key, value = Gtk.Label(xalign=0), Gtk.Label(xalign=0)
+            key.get_style_context().add_class('pv-key')
+            value.get_style_context().add_class('pv-val')
+            value.set_line_wrap(True)
+            value.set_max_width_chars(24)
+            self.preview_meta.attach(key, 0, i, 1, 1)
+            self.preview_meta.attach(value, 1, i, 1, 1)
+            self.preview_fields.append((key, value))
         self.preview.pack_start(self.preview_meta, False, False, 0)
         self.preview_buttons = []
         for key, cb in (('open', self.open_current), ('open_folder', self.open_folder),
                         ('copy_path', self.copy_path), ('copy_file', self.copy_file)):
             button = Gtk.Button(label=t(self.lang, key))
+            button.get_style_context().add_class('pv-primary' if key == 'open' else 'pv-secondary')
             button.connect('clicked', lambda _b, callback=cb: callback())
             self.preview.pack_start(button, False, False, 0)
             self.preview_buttons.append(button)
+        for child in self.preview.get_children():
+            child.show_all()
+        self.preview_keys = Gtk.Label(label='Enter · Ctrl Enter · Ctrl Shift C · Ctrl C', xalign=0)
+        self.preview_keys.get_style_context().add_class('dim-label')
+        self.preview.pack_start(self.preview_keys, False, False, 0)
+        self.preview_keys.show()
         self.preview.show_all()
         self.preview.set_visible(self.size[0] >= 960)
 
@@ -906,6 +926,8 @@ class Window:
         self.state = Gtk.Label(xalign=1)
         self.state.set_ellipsize(Pango.EllipsizeMode.START)
         bar.pack_start(self.status, True, True, 0)
+        self.status_keys = Gtk.Label(label='↑↓ · Enter · Ctrl Enter · Ctrl Shift C')
+        bar.pack_start(self.status_keys, False, False, 0)
         bar.pack_end(self.state, False, False, 0)
         box.pack_start(bar, False, False, 0)
 
@@ -1395,6 +1417,7 @@ class Window:
         width, height = win.get_size()
         if hasattr(self, 'preview'):
             self.preview.set_visible(width >= 960)
+            self.status_keys.set_visible(width >= 860)
         if self.maximized:
             return False
         # the folded height is never remembered; only the height with the list shown
@@ -1668,11 +1691,10 @@ class Window:
             for j, k in enumerate(range(self.top, end)):
                 name, folder, size, mtime = res.row(k)
                 mark = self.versions.mark(k) if self.versions is not None else None
-                values = ['folder' if size < 0 else 'text-x-generic', core.display(name), core.display(folder),
+                values = [{'folder': 'folder', 'image': 'image-x-generic', 'doc': 'x-office-document', 'archive': 'package-x-generic', 'code': 'text-x-script', 'audio': 'video-x-generic'}.get(core.category(name, size), 'text-x-generic'), core.display(name), core.display(folder),
                           core.human_size(size), core.human_time(mtime), self.tooltip(k, name, folder),
                           t(self.lang, 'ver_' + mark) if mark else '']
-                name_markup = core.highlight(core.display(name), self.clauses, 'pango', self.mark_bg, self.mark_fg)
-                path_markup = core.highlight(core.short_dir(folder), self.clauses, 'pango', self.mark_bg, self.mark_fg)
+                name_markup, path_markup = core.highlight_row(core.display(name), core.short_dir(folder), self.clauses, 'pango', self.mark_bg, self.mark_fg)
                 tag = ' <span size="smaller">%s</span>' % GLib.markup_escape_text(values[6]) if mark else ''
                 values.extend([name_markup + tag + '\n<span size="smaller" foreground="%s">%s</span>' % (self.ink3, path_markup),
                                GLib.markup_escape_text(core.human_size(size) or '—') + '\n<span size="smaller" foreground="%s">%s</span>' %
@@ -1762,6 +1784,8 @@ class Window:
 
     def render_preview(self):
         path = self.current_path()
+        self.preview_icon.set_visible(bool(path))
+        self.preview_keys.set_visible(bool(path))
         labels = self.preview_widgets
         self.preview_path.set_visible(bool(path))
         for button in self.preview_buttons:
@@ -1771,8 +1795,9 @@ class Window:
             st = self.index.status()
             labels['name'].set_text(core.text('app_name', self.lang))
             labels['type'].set_text('')
-            self.preview_meta.set_text(core.text('pv_index_entries', self.lang) + ': ' + str(st['entries']) +
-                                       '\n' + core.text('pv_index_watch', self.lang) + ': ' + core.text('watch_' + st['watch'], self.lang))
+            self.set_preview_fields((('pv_index_entries', str(st['entries'])),
+                                     ('pv_index_folders', str(len(self.index.base.dirs) - len(self.index.dead) + len(self.index.extra_dirs))),
+                                     ('pv_index_watch', core.text('watch_' + st['watch'], self.lang))))
             return
         name, folder, size, mtime = self.result.row(self.cur)
         kind = core.text('pv_kind_folder', self.lang) if size < 0 else core.text('pv_kind_file', self.lang, ext=os.path.splitext(name)[1].lstrip('.').upper())
@@ -1782,9 +1807,19 @@ class Window:
         name_hit = bool(core._ranges(core.display(name), self.clauses))
         dir_hit = bool(core._ranges(core.short_dir(folder), self.clauses))
         hit = 'pv_hit_both' if name_hit and dir_hit else 'pv_hit_name' if name_hit else 'pv_hit_path' if dir_hit else None
-        self.preview_meta.set_text('\n'.join(core.text(key, self.lang) + ': ' + value for key, value in
-            (('pv_size', core.human_size(size) or '—'), ('pv_modified', core.human_time(mtime)),
-             ('pv_type', kind), ('pv_hit', core.text(hit, self.lang) if hit else '—'))))
+        self.set_preview_fields((('pv_size', core.human_size(size) or '—'),
+                                 ('pv_modified', core.human_time(mtime)), ('pv_type', kind),
+                                 ('pv_hit', core.text(hit, self.lang) if hit else '—')))
+
+    def set_preview_fields(self, fields):
+        for i, (key, value) in enumerate(self.preview_fields):
+            visible = i < len(fields)
+            key.set_visible(visible)
+            value.set_visible(visible)
+            if visible:
+                key.set_text(core.text(fields[i][0], self.lang))
+                value.set_text(fields[i][1])
+
 
     def current_path(self):
         if self.result is not None and 0 <= self.cur < self.count():
@@ -2017,7 +2052,7 @@ class Window:
 
     # ------------------------------------------------------------ status
 
-    def show_message(self, text, kind, seconds=4):
+    def show_message(self, text, kind, seconds=5):
         """Show text instead of the result count; seconds=None keeps it until the next message."""
         self.message = (text, kind)
         self.update_status()
@@ -2047,7 +2082,7 @@ class Window:
         if self.result is None:
             self.status.set_text('')
             return
-        text = t(self.lang, 'results_ms', count='{:,}'.format(self.count()), ms=self.result.ms)
+        text = core.text('results_ms', self.lang, count='{:,}'.format(self.count()), ms=self.result.ms)
         if self.versions is not None and self.versions.skipped:
             text += ' · ' + t(self.lang, 'ver_skipped')
         self.status.set_text(text)

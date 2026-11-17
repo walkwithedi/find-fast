@@ -443,6 +443,8 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
         elif url.path == '/api/status':
             status = st.index.status()
+            with st.index.lock:
+                status['dirs'] = len(st.index.base.dirs) - len(st.index.dead) + len(st.index.extra_dirs)
             status['lang'] = core.ui_language()
             status['applying'] = st.is_applying()
             status['match_path'] = st.index.config.match_path()

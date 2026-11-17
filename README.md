@@ -207,3 +207,9 @@ MIT, see [LICENSE](LICENSE).
 ## Feedback
 
 Send suggestions and feedback to [hong.xie.me@outlook.com](mailto:hong.xie.me@outlook.com).
+
+### Result view (P0 interaction update)
+
+Both the GTK window and local page show two-line results: highlighted names, shortened folders, size and relative modification time. Select a result to see its full path and absolute modification time in the details panel. Open, Locate and Copy path are in the panel; GTK also offers Copy file. At narrower widths use the context menu or keyboard. Sorting uses the separate sort control; column headers and column-order settings have been removed. The browser’s More menu contains Rescan, Upgrade, Quit and the page-close rule. Appearance can be switched between light and dark and is remembered. Scan progress overlays the search area without moving the results.
+
+The search/index rules, configurable shortcuts, version groups, exclusions, upgrade and rollback behavior are unchanged. Type filters, redesigned empty states and the other remaining UX tasks are outside P0. See [P0 acceptance report](docs/P0-验收报告.md).

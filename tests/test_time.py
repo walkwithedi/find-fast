@@ -7,7 +7,7 @@
 import sys
 import time
 
-import pytest
+import unittest
 
 import find_fast_core as core  # noqa: E402  （路径由 conftest.py 注入）
 
@@ -22,42 +22,36 @@ def ts(year, month, day, hour=0, minute=0):
 def short(when, lang='zh'):
     fn = getattr(core, 'human_time_short', None)
     if fn is None:
-        pytest.fail('find_fast_core.human_time_short 尚未实现（见 docs/06 6.1）', pytrace=False)
+        raise AssertionError('find_fast_core.human_time_short 尚未实现（见 docs/06 6.1）')
     return fn(when, now=NOW, lang=lang)
 
 
-@pytest.mark.parametrize('delta,zh,en', [
-    (0, '刚刚', 'just now'),
-    (30, '刚刚', 'just now'),
-    (59, '刚刚', 'just now'),
-    (60, '1 分钟前', '1 min ago'),
-    (300, '5 分钟前', '5 min ago'),
-    (3599, '59 分钟前', '59 min ago'),
-    (3600, '1 小时前', '1 h ago'),
-    (3 * 3600, '3 小时前', '3 h ago'),
-    (86399, '23 小时前', '23 h ago'),
-    (D, '1 天前', '1 day ago'),
-    (6 * D, '6 天前', '6 days ago'),
-])
-def test_relative(delta, zh, en):
-    assert short(NOW - delta, 'zh') == zh
-    assert short(NOW - delta, 'en') == en
+class TimeTests(unittest.TestCase):
+    def test_relative(self):
+        cases = [(0, '刚刚', 'just now'), (30, '刚刚', 'just now'), (59, '刚刚', 'just now'),
+                 (60, '1 分钟前', '1 min ago'), (300, '5 分钟前', '5 min ago'),
+                 (3599, '59 分钟前', '59 min ago'), (3600, '1 小时前', '1 h ago'),
+                 (10800, '3 小时前', '3 h ago'), (86399, '23 小时前', '23 h ago'),
+                 (D, '1 天前', '1 day ago'), (6 * D, '6 天前', '6 days ago')]
+        for delta, zh, en in cases:
+            with self.subTest(delta=delta):
+                self.assertEqual(short(NOW - delta, 'zh'), zh)
+                self.assertEqual(short(NOW - delta, 'en'), en)
+
+    def test_absolute_this_year(self):
+        assert short(ts(2026, 10, 8, 9, 30)) == '10-08'
+        assert short(ts(2026, 1, 2, 0, 0)) == '01-02'
 
 
-def test_absolute_this_year():
-    assert short(ts(2026, 10, 8, 9, 30)) == '10-08'
-    assert short(ts(2026, 1, 2, 0, 0)) == '01-02'
+    def test_absolute_other_year(self):
+        assert short(ts(2025, 12, 31, 23, 0)) == '2025-12-31'
 
 
-def test_absolute_other_year():
-    assert short(ts(2025, 12, 31, 23, 0)) == '2025-12-31'
+    def test_future_clock_skew(self):
+        assert short(NOW + 10) == '刚刚'
+        assert short(NOW + 3 * D) == '2026-11-20'
 
 
-def test_future_clock_skew():
-    assert short(NOW + 10) == '刚刚'
-    assert short(NOW + 3 * D) == '2026-11-20'
-
-
-def test_seven_days_is_absolute():
-    # 第 7 天起不再说「天前」，避免「12 天前」这种要心算的表述
-    assert short(NOW - 7 * D) == '11-10'
+    def test_seven_days_is_absolute(self):
+        # 第 7 天起不再说「天前」，避免「12 天前」这种要心算的表述
+        assert short(NOW - 7 * D) == '11-10'

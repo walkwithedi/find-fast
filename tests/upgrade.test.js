@@ -111,6 +111,7 @@ async function nextDialog(dialogs, before) {
     }));
     await page.goto(srv.url);
     await page.waitForFunction(() => document.getElementById('up-open').textContent === '升级');
+    await page.click('#moreLabel');
     await page.click('#up-open');
     assert.ok(await page.isVisible('#upgrade'));
     await page.waitForFunction(() => document.getElementById('up-rollback').title !== '');
@@ -159,6 +160,7 @@ async function nextDialog(dialogs, before) {
     await page.waitForFunction(v => document.getElementById('version').textContent.includes(v.slice(1)), ctx.newVer);
     assert.ok(fs.existsSync(path.join(ctx.work, 'apps', '.find-fast.上一版', 'my-notes.txt')));
 
+    await page.click('#moreLabel');
     await page.click('#up-open');
     await page.waitForFunction(() => !document.getElementById('up-rollback').disabled);
     const back = page.waitForEvent('load', {timeout: 60000}).catch(e => e);
@@ -178,6 +180,7 @@ async function nextDialog(dialogs, before) {
     const p2 = await (await browser.newContext({bypassCSP: true})).newPage();
     await p2.goto(srv.url);
     await p2.waitForFunction(() => document.getElementById('up-open').textContent === 'Upgrade');
+    await p2.click('#moreLabel');
     await p2.click('#up-open');
     assert.strictEqual(await p2.textContent('#up-rollback'), 'Roll back to previous version');
     await p2.setInputFiles('#up-file', ctx.zip);

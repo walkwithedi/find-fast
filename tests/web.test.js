@@ -59,7 +59,7 @@ function exited(proc, ms) {
 }
 
 async function rowNames(page) {
-  return page.$$eval('#rows tr td.name', tds => tds.map(td => td.textContent));
+  return page.$$eval('#rows > .row .nm', tds => tds.map(td => td.textContent));
 }
 
 (async () => {
@@ -79,38 +79,51 @@ async function rowNames(page) {
     assert.strictEqual(await page.title(), '秒搜文件');
     assert.strictEqual(await page.textContent('h1'), '秒搜文件');
     assert.strictEqual(await page.textContent('#quit'), '退出');
-    await page.waitForFunction(() => /条目/.test(document.getElementById('index').textContent));
+    await page.waitForFunction(() => /共 .* 项/.test(document.getElementById('indexState').textContent));
     // the default global shortcut could not be written (no desktop): said once the page is up
-    await page.waitForFunction(() => /^设置默认唤起快捷键失败：/.test(document.getElementById('status').textContent));
-    assert.strictEqual(await page.getAttribute('#status', 'class'), 'warn');
+    await page.waitForFunction(() => /^设置默认唤起快捷键失败：/.test(document.getElementById('toast').textContent));
+    assert.strictEqual(await page.getAttribute('#toast', 'class'), 'warn');
     assert.ok(JSON.parse(fs.readFileSync(path.join(tmp, 'config.json'), 'utf8')).toggle_default_done);
     assert.match(await page.textContent('#version'), /^v\d+\.\d+\.\d+$/);
     assert.match(await page.textContent('#rule'), /关闭本页/);
 
     // search, newest first
     await page.fill('#q', 'report');
-    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('count').textContent));
     assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf', 'report-draft.docx', 'report-2019.pdf']);
-    assert.strictEqual(await page.getAttribute('#status', 'aria-live'), 'polite');
+    assert.strictEqual(await page.getAttribute('.statusbar', 'aria-live'), 'polite');
+    assert.strictEqual(await page.locator('#rows mark').count(), 3);
+    assert.strictEqual(await page.locator('#rows > .row').first().evaluate(e => e.getBoundingClientRect().height), 48);
+    await page.click('#rows > .row:first-child');
+    assert.ok((await page.textContent('#pvContent')).includes('Report 2024.pdf'));
+    assert.ok((await page.textContent('#pvContent')).includes(path.join(srv.root, 'docs', 'Report 2024.pdf')));
+    await page.click('#themeBtn');
+    assert.strictEqual(await page.getAttribute('html','data-theme'), 'dark');
+    await page.reload();
+    await page.waitForFunction(() => document.getElementById('indexState').textContent.includes('项'));
+    assert.strictEqual(await page.getAttribute('html','data-theme'), 'dark');
+    await page.click('#themeBtn');
+    await page.fill('#q','report');
+    await page.waitForFunction(() => document.querySelectorAll('#rows > .row').length === 3);
     // hovering a row shows its full path
-    assert.deepStrictEqual(await page.$$eval('#rows tr', trs => trs.map(tr => tr.title)),
+    assert.deepStrictEqual(await page.$$eval('#rows > .row', trs => trs.map(tr => tr.title)),
       [path.join(srv.root, 'docs', 'Report 2024.pdf'), path.join(srv.root, 'docs', 'report-draft.docx'),
        path.join(srv.root, 'docs', 'old', 'report-2019.pdf')]);
 
     // words also match folder names; settings can turn that off (no rescan needed)
     assert.match(await page.textContent('#help'), /所在文件夹的名称/);
     await page.fill('#q', 'old 2019');
-    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('count').textContent));
     assert.deepStrictEqual(await rowNames(page), ['report-2019.pdf']);
     await page.fill('#q', 'docs report');
-    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('count').textContent));
     await page.click('#gear');
-    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setColumns li').length === 4);
+    await page.waitForFunction(() => document.getElementById('settings').open);
     assert.ok(await page.isChecked('#setMatchPath'));
     await page.uncheck('#setMatchPath');
     await page.click('#setSave');
     await page.waitForFunction(() => !document.getElementById('settings').open);
-    await page.waitForFunction(() => /^0 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^0 个结果/.test(document.getElementById('count').textContent));
     assert.match(await page.textContent('#help'), /只看文件名/);
     assert.strictEqual(JSON.parse(fs.readFileSync(path.join(tmp, 'config.json'), 'utf8')).match_path, false);
     await page.click('#gear');
@@ -124,124 +137,75 @@ async function rowNames(page) {
     assert.ok(!(await page.isChecked('#setMatchPath')));
     await page.check('#setMatchPath');
     await page.click('#setSave');
-    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('count').textContent));
 
-    // column order: drag a header; the locate column stays last; kept after a reload
-    const heads = () => page.$$eval('thead th', ths => ths.map(th => th.dataset.sort || th.id));
-    const cells = () => page.$$eval('#rows tr:first-child td', tds => tds.map(td => td.className));
-    assert.deepStrictEqual(await heads(), ['name', 'path', 'size', 'mtime', 'hLoc']);
-    const nameBox = await page.locator('th[data-sort="name"]').boundingBox();
-    await page.locator('th[data-sort="size"]').dragTo(page.locator('th[data-sort="name"]'),
-      {targetPosition: {x: 5, y: nameBox.height / 2}});
-    await page.waitForFunction(() => document.querySelector('thead th').dataset.sort === 'size');
-    assert.deepStrictEqual(await heads(), ['size', 'name', 'path', 'mtime', 'hLoc']);
-    assert.deepStrictEqual(await cells(), ['size', 'name', 'dir', 'time', 'loc']);
-    const timeBox = await page.locator('th[data-sort="mtime"]').boundingBox();
-    await page.locator('th[data-sort="name"]').dragTo(page.locator('th[data-sort="mtime"]'),
-      {targetPosition: {x: timeBox.width - 5, y: timeBox.height / 2}});
-    await page.waitForFunction(() => document.querySelector('thead th:nth-child(4)').dataset.sort === 'name');
-    assert.deepStrictEqual(await heads(), ['size', 'path', 'mtime', 'name', 'hLoc']);
-    await page.reload();
-    await page.waitForFunction(() => /条目/.test(document.getElementById('index').textContent));
-    assert.deepStrictEqual(await heads(), ['size', 'path', 'mtime', 'name', 'hLoc']);
-    // the same from the keyboard in Settings: move up/down, default order; applied on Save
-    await page.click('#gear');
-    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setColumns li').length === 4);
-    const setCols = () => page.$$eval('#setColumns li > span:first-child', xs => xs.map(x => x.textContent));
-    assert.deepStrictEqual(await setCols(), ['大小', '路径', '修改时间', '名称']);
-    assert.ok(await page.isDisabled('#setColumns li:first-child button[data-dir="-1"]'));
-    assert.ok(await page.isDisabled('#setColumns li:last-child button[data-dir="1"]'));
-    assert.strictEqual(await page.getAttribute('#setColumns li:last-child button[data-dir="-1"]', 'aria-label'), '上移「名称」');
-    await page.focus('#setColumns li:last-child button[data-dir="-1"]');
-    await page.keyboard.press('Enter');
-    assert.deepStrictEqual(await setCols(), ['大小', '路径', '名称', '修改时间']);
-    assert.strictEqual(await page.evaluate(() => document.activeElement.getAttribute('aria-label')), '上移「名称」');
-    await page.click('#colDefaults');
-    assert.deepStrictEqual(await setCols(), ['名称', '路径', '大小', '修改时间']);
-    await page.click('#setColumns li:first-child button[data-dir="1"]');
-    assert.deepStrictEqual(await setCols(), ['路径', '名称', '大小', '修改时间']);
-    await page.click('#setCancel');
-    assert.deepStrictEqual(await heads(), ['size', 'path', 'mtime', 'name', 'hLoc']);
-    await page.click('#gear');
-    await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setColumns li').length === 4);
-    await page.click('#colDefaults');
-    await page.click('#setSave');
-    await page.waitForFunction(() => !document.getElementById('settings').open);
-    assert.deepStrictEqual(await heads(), ['name', 'path', 'size', 'mtime', 'hLoc']);
+    // The two-line layout removes the table and column-order setting.
+    assert.strictEqual(await page.locator('thead').count(), 0);
+    assert.strictEqual(await page.locator('#setColumns').count(), 0);
     await page.fill('#q', 'report');
-    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('count').textContent));
 
     // keyboard: down, enter opens, ctrl+enter opens the folder, ctrl+c copies
     await page.press('#q', 'ArrowDown');
     await page.keyboard.press('ArrowDown');
-    assert.strictEqual(await page.$eval('tr[aria-selected="true"] td.name', td => td.textContent), 'report-draft.docx');
+    assert.strictEqual(await page.$eval('.row[aria-selected="true"] .nm', td => td.textContent), 'report-draft.docx');
     await page.keyboard.press('Enter');
     await page.waitForFunction(() => true);
     for (let i = 0; i < 50 && !fs.existsSync(srv.log); i++) await page.waitForTimeout(100);
     assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim(), path.join(srv.root, 'docs', 'report-draft.docx'));
-    // the locate button at the end of a row; without a file manager service the folder is opened
+    // Selection actions use the preview; Ctrl+Enter also works when it is hidden.
     assert.strictEqual(await page.textContent('#folder'), '定位');
-    assert.strictEqual(await page.getAttribute('#rows tr:nth-child(1) button.locate', 'aria-label'), '定位 Report 2024.pdf');
-    await page.click('#rows tr:nth-child(1) button.locate');
+    await page.click('#rows > .row:nth-child(1)');
+    await page.keyboard.press('Control+Enter');
     for (let i = 0; i < 50 && fs.readFileSync(srv.log, 'utf8').trim().split('\n').length < 2; i++) await page.waitForTimeout(100);
     assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim().split('\n')[1], path.join(srv.root, 'docs'));
-    await page.waitForFunction(() => /已打开所在文件夹/.test(document.getElementById('status').textContent));
-    assert.strictEqual(await page.$eval('tr[aria-selected="true"] td.name', td => td.textContent), 'Report 2024.pdf');
-    await page.focus('#rows tr:nth-child(1) button.locate');
-    await page.keyboard.press('Tab');
-    assert.strictEqual(await page.evaluate(() => document.activeElement.closest('tr').querySelector('td.name').textContent), 'report-draft.docx');
-    assert.ok(await page.evaluate(() => document.activeElement.matches(':focus-visible')
-      && getComputedStyle(document.activeElement).outlineStyle !== 'none'));
-    await page.keyboard.press('Enter');
-    for (let i = 0; i < 50 && fs.readFileSync(srv.log, 'utf8').trim().split('\n').length < 3; i++) await page.waitForTimeout(100);
-    assert.strictEqual(fs.readFileSync(srv.log, 'utf8').trim().split('\n').length, 3);
-    await page.click('#rows tr:nth-child(2) td.name');
+    await page.waitForFunction(() => /已打开所在文件夹/.test(document.getElementById('toast').textContent));
+    await page.click('#rows > .row:nth-child(2) .nm');
     await page.keyboard.press('Control+c');
-    await page.waitForFunction(() => /已复制路径/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /已复制路径/.test(document.getElementById('toast').textContent));
     assert.strictEqual(await page.evaluate(() => navigator.clipboard.readText()), path.join(srv.root, 'docs', 'report-draft.docx'));
-    assert.strictEqual(await page.getAttribute('#status', 'class'), 'ok');
+    assert.strictEqual(await page.getAttribute('#toast', 'class'), 'ok');
 
     // sort by name through the header, then the select
-    await page.click('#hName');
+    await page.selectOption('#sort','name:0');
     // wait for the re-sorted rows themselves: the first row is the same in both orders
-    await page.waitForFunction(() => Array.from(document.querySelectorAll('#rows td.name'), td => td.textContent).join('|')
-      === 'Report 2024.pdf|report-2019.pdf|report-draft.docx'
-      && document.querySelector('th[data-sort="name"]').getAttribute('aria-sort') === 'ascending');
+    await page.waitForFunction(() => Array.from(document.querySelectorAll('#rows .nm'), td => td.textContent).join('|')
+      === 'Report 2024.pdf|report-2019.pdf|report-draft.docx');
     await page.selectOption('#sort', 'size:1');
-    await page.waitForFunction(() => document.querySelector('th[data-sort="size"]').getAttribute('aria-sort') === 'descending');
+    await page.waitForFunction(() => document.getElementById('sort').value === 'size:1');
 
     // bad regular expression
     await page.fill('#q', 'regex:(');
-    await page.waitForFunction(() => document.getElementById('status').className === 'warn');
-    assert.match(await page.textContent('#status'), /^搜索失败：/);
+    await page.waitForFunction(() => document.getElementById('toast').className === 'warn');
+    assert.match(await page.textContent('#toast'), /^搜索失败：/);
     assert.strictEqual((await rowNames(page)).length, 0);
 
     // more rows than one request: "show more" and End
     await page.fill('#q', 'item-');
-    await page.waitForFunction(() => /^450 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^450 个结果/.test(document.getElementById('count').textContent));
     assert.strictEqual((await rowNames(page)).length, 200);
-    await page.click('#more');
-    await page.waitForFunction(() => document.querySelectorAll('#rows tr').length === 400);
+    await page.locator('.listwrap').evaluate(e => { e.scrollTop = e.scrollHeight; });
+    await page.waitForFunction(() => document.querySelectorAll('#rows > .row').length >= 400);
 
     // similar versions: tags, the hover line and "go to the newest version"
     await page.selectOption('#sort', 'mtime:1');
     await page.fill('#q', '示例方案');
-    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('status').textContent));
-    assert.deepStrictEqual(await page.$$eval('#rows tr', trs => trs.map(tr => (tr.querySelector('.tag') || {}).textContent)),
+    await page.waitForFunction(() => /^3 个结果/.test(document.getElementById('count').textContent));
+    assert.deepStrictEqual(await page.$$eval('#rows > .row', trs => trs.map(tr => (tr.querySelector('.tag') || {}).textContent)),
       ['最新', '有更新版', '有更新版']);
-    assert.match(await page.getAttribute('#rows tr:nth-child(3)', 'title'), /\n同组共 3 个类似版本，最新：.*示例方案_v2\.docx$/);
-    await page.click('#rows tr:nth-child(3)', {button: 'right'});
+    assert.match(await page.getAttribute('#rows > .row:nth-child(3)', 'title'), /\n同组共 3 个类似版本，最新：.*示例方案_v2\.docx$/);
+    await page.click('#rows > .row:nth-child(3)', {button: 'right'});
     assert.ok(await page.isVisible('#mJump'));
     await page.click('#mJump');
-    await page.waitForFunction(() => document.querySelector('tr[aria-selected="true"] td.name').textContent.endsWith('示例方案_v2.docx'));
-    await page.click('#rows tr:nth-child(1)', {button: 'right'});
+    await page.waitForFunction(() => document.querySelector('.row[aria-selected="true"] .nm').textContent.endsWith('示例方案_v2.docx'));
+    await page.click('#rows > .row:nth-child(1)', {button: 'right'});
     assert.ok(await page.isHidden('#mJump'));
     await page.keyboard.press('Escape');
 
     // right-click a row: exclude its folder after confirming
     await page.fill('#q', 'report-2019');
-    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
-    await page.click('#rows tr', {button: 'right'});
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('count').textContent));
+    await page.click('#rows > .row', {button: 'right'});
     assert.ok(await page.isVisible('#ctx'));
     assert.strictEqual(await page.textContent('#mExclude'), '排除所在文件夹');
     assert.deepStrictEqual(await page.$$eval('#ctx button:not([hidden])', bs => bs.map(b => b.textContent)),
@@ -250,15 +214,15 @@ async function rowNames(page) {
     let asked = '';
     page.once('dialog', d => { asked = d.message(); d.accept(); });
     await page.click('#mExclude');
-    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('toast').textContent));
     assert.ok(asked.includes(path.join(srv.root, 'docs', 'old')), asked);
     assert.ok(await page.isHidden('#ctx'));
     await page.fill('#q', 'report-2019');
-    await page.waitForFunction(() => /^0 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^0 个结果/.test(document.getElementById('count').textContent));
     // a folder row offers "exclude this folder"; Escape closes the menu
     await page.fill('#q', 'pics');
-    await page.waitForFunction(() => document.querySelector('#rows td.name') && /pics/.test(document.querySelector('#rows td.name').textContent));
-    await page.click('#rows tr', {button: 'right'});
+    await page.waitForFunction(() => document.querySelector('#rows .nm') && /pics/.test(document.querySelector('#rows .nm').textContent));
+    await page.click('#rows > .row', {button: 'right'});
     assert.strictEqual(await page.textContent('#mExclude'), '排除此文件夹');
     assert.ok(await page.isHidden('#mJump'));
     await page.keyboard.press('Escape');
@@ -285,9 +249,9 @@ async function rowNames(page) {
     await page.setViewportSize({width: 1100, height: 800});
     await page.click('#setAnyway');
     await page.waitForFunction(() => !document.getElementById('settings').open);
-    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /已按新设置更新索引/.test(document.getElementById('toast').textContent));
     await page.fill('#q', 'report');
-    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('status').textContent));
+    await page.waitForFunction(() => /^1 个结果/.test(document.getElementById('count').textContent));
     assert.deepStrictEqual(await rowNames(page), ['Report 2024.pdf']);
     const saved = JSON.parse(fs.readFileSync(path.join(path.dirname(srv.root), 'config.json'), 'utf8'));
     assert.ok(saved.exclude.includes('*.docx') && saved.exclude.includes(path.join(srv.root, 'pics')));
@@ -303,13 +267,13 @@ async function rowNames(page) {
     // narrow screen: no horizontal page scroll; dark mode colours
     await page.setViewportSize({width: 360, height: 700});
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= 360), 'horizontal scroll at 360px');
-    await page.emulateMedia({colorScheme: 'dark'});
-    assert.strictEqual(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(13, 17, 23)');
+    await page.click('#themeBtn');
+    assert.strictEqual(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), 'rgb(10, 12, 15)');
     assert.deepStrictEqual(errors, []);
 
     // a reload keeps the service; closing the last page stops it
     await page.reload();
-    await page.waitForFunction(() => /条目/.test(document.getElementById('index').textContent));
+    await page.waitForFunction(() => /共 .* 项/.test(document.getElementById('indexState').textContent));
     assert.strictEqual(srv.proc.exitCode, null);
     await page.close({runBeforeUnload: true});
     assert.ok(await exited(srv.proc, 15000), 'service did not exit after the page closed');
@@ -320,6 +284,7 @@ async function rowNames(page) {
     await p2.goto(srv.url);
     await p2.waitForFunction(() => document.getElementById('title').textContent === 'find-fast');
     assert.strictEqual(await p2.textContent('#quit'), 'Quit');
+    await p2.click('#moreLabel');
     await p2.click('#quit');
     await p2.waitForFunction(() => getComputedStyle(document.getElementById('closed')).display === 'block');
     assert.ok(await p2.isDisabled('#q'));
