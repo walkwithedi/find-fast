@@ -232,6 +232,34 @@ mark { background:var(--mark-bg); color:var(--mark-fg); border-radius:2px; }
 .ico { color:var(--ink-3); }
 .ico svg { fill:none; stroke:currentColor; stroke-width:1.6; }
 @media(max-width:720px) { .tm { display:none; } #rows > .row { grid-template-columns:20px minmax(0,1fr) 80px; } }
+html,body { height:100%; }
+body { font-size:13px; }
+main.shell { width:100%; max-width:none; height:100dvh; margin:0; padding:0; display:flex; flex-direction:column; background:var(--surface); overflow:hidden; }
+.titlebar { height:30px; flex:none; background:var(--surface-2); border-bottom:1px solid var(--line); padding:0 12px; }
+.titlebar h1 { font-size:12.5px; font-weight:500; }
+.titlebar button,.titlebar summary { padding:1px 7px; font-size:12px; }
+.searchbar { flex:none; position:relative; margin:0; padding:10px 14px; flex-wrap:nowrap; }
+#q { height:44px; font-size:15.5px; border-radius:12px; background:var(--surface-2); }
+#q:focus { background:var(--surface); border-color:var(--accent); }
+.stage { display:flex; flex:1; min-height:0; }
+.listwrap { flex:1; scrollbar-gutter:stable; overflow-x:hidden; }
+.preview { flex:0 0 340px; width:340px; padding:16px; border-left:1px solid var(--line); background:var(--surface-2); overflow:auto; }
+.preview h2 { font-size:14px; margin:0; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:3; -webkit-box-orient:vertical; overflow:hidden; }
+.pv-heading { display:flex; align-items:center; gap:12px; }
+.pv-heading svg { flex:none; width:46px; height:46px; padding:12px; fill:none; stroke:currentColor; border:1px solid var(--line); border-radius:10px; background:var(--surface); }
+.pv-type,.pv-keys { color:var(--ink-3); font-size:12.5px; }
+.pv-path { padding:10px; max-height:100px; overflow:auto; overflow-wrap:anywhere; user-select:text; border:1px solid var(--line-2); border-radius:6px; color:var(--ink-2); }
+.preview dl { display:grid; grid-template-columns:auto minmax(0,1fr); gap:7px 14px; margin:18px 0; font-size:12.5px; }
+.preview dt { color:var(--ink-3); }.preview dd { margin:0; color:var(--ink-2); overflow-wrap:anywhere; }
+.pv-actions { display:grid; grid-template-columns:1fr 1fr; gap:8px; }.pv-actions[hidden] { display:none; }
+.pv-actions #open { grid-column:1 / -1; background:var(--accent-solid); color:var(--on-accent); border-color:var(--accent-solid); }
+.pv-keys { padding-top:16px; border-top:1px dashed var(--line); line-height:2; font-size:11.5px; }
+#moreMenu { position:relative; }#moreMenu summary { list-style:none; cursor:pointer; }
+.global-menu { position:absolute; right:0; top:26px; width:240px; z-index:20; padding:8px; background:var(--surface); border:1px solid var(--line); border-radius:8px; box-shadow:var(--shadow-2); }
+.global-menu button { display:block; width:100%; text-align:left; border:0; }.global-menu p { color:var(--ink-3); font-size:11.5px; }
+#upgrade.card { flex:none; max-height:50vh; overflow:auto; margin:0; }
+#closed { position:fixed; inset:40% 10% auto; z-index:30; }
+@media(max-width:1079px) { .preview { display:none; } }
 </style>
 </head>
 <body>
@@ -369,13 +397,17 @@ mark { background:var(--mark-bg); color:var(--mark-fg); border-radius:2px; }
   </symbol>
 </svg>
 
-<main>
-  <header>
+<main class="shell">
+  <header class="titlebar">
     <h1 id="title">秒搜文件</h1>
     <div class="tools">
       <button id="themeBtn" type="button">◐</button>
-      <button id="up-open" type="button" aria-expanded="false" aria-controls="upgrade">升级</button>
-      <button id="quit" type="button">退出</button>
+      <details id="moreMenu"><summary id="moreLabel">⋯</summary><div class="global-menu">
+    <button id="rescan" type="button">重新扫描</button>
+      <button id="up-open" type="button" aria-expanded="false" aria-controls="upgrade"></button>
+      <button id="quit" type="button"></button>
+      <p id="rule"></p>
+      </div></details>
     </div>
   </header>
   <section id="upgrade" class="card" aria-labelledby="upgrade-title">
@@ -395,7 +427,7 @@ mark { background:var(--mark-bg); color:var(--mark-fg); border-radius:2px; }
     <div id="up-report" class="ureport"></div>
     <div class="row"><button id="up-go" class="primary" type="button" hidden></button></div>
   </section>
-  <div class="bar">
+  <div class="bar searchbar">
     <input id="q" type="search" autocomplete="off" spellcheck="false" autofocus role="combobox" aria-expanded="true" aria-controls="rows" aria-autocomplete="list" aria-label="搜索">
     <button id="gear" type="button" aria-label="设置" title="设置">⚙</button>
     <label for="sort" id="sortLabel">排序</label>
@@ -410,16 +442,21 @@ mark { background:var(--mark-bg); color:var(--mark-fg); border-radius:2px; }
     </select>
   </div>
   <p class="help" id="help"></p>
-  <div class="actions">
-    <button id="open" type="button" disabled>打开</button>
-    <button id="folder" type="button" disabled>定位</button>
-    <button id="copy" type="button" disabled>复制路径</button>
-    <button id="rescan" type="button">重新扫描</button>
-  </div>
   <div id="status" role="status" aria-live="polite"></div>
+  <div class="stage">
   <div class="listwrap">
     <div id="rows" role="listbox" tabindex="0"></div>
     <div id="listEnd" class="end-note" hidden role="presentation"></div>
+  </div>
+  <aside id="preview" class="preview">
+    <div id="pvContent"></div>
+    <div id="pvActions" class="pv-actions">
+    <button id="open" type="button" disabled>打开</button>
+    <button id="folder" type="button" disabled>定位</button>
+    <button id="copy" type="button" disabled>复制路径</button>
+    </div>
+    <p id="pvKeys" class="pv-keys"></p>
+  </aside>
   </div>
   <div id="closed">服务已退出，可关闭本页。</div>
   <div id="ctx" role="menu" hidden>
@@ -458,7 +495,7 @@ mark { background:var(--mark-bg); color:var(--mark-fg); border-radius:2px; }
       <button type="button" id="setSave">保存</button>
     </div>
   </dialog>
-  <footer><span id="rule">关闭本页后服务数秒内自动退出；点「退出」立即结束。</span><span id="version"></span><span id="index"></span></footer>
+  <footer><span id="version"></span><span id="index"></span></footer>
 </main>
 <script>
 'use strict';
@@ -884,7 +921,52 @@ function applyLanguage(lang) {
   $('gear').setAttribute('aria-label', L.settings); $('gear').title = L.settings;
   $('setTitle').textContent = L.settings; $('setRootsH').textContent = L.setRoots; $('setExcludeH').textContent = L.setExclude;
   $('setHiddenL').textContent = L.setHidden; $('setMatchPathL').textContent = L.setMatchPath;
+  ['addRoot', 'addExcludeFolder'].forEach(id => { $(id).textContent = L.addFolder; });
+  ['addRootPath', 'addRule'].forEach(id => { $(id).textContent = L.add; });
+  $('ruleIn').placeholder = L.rulePh; $('ruleIn').setAttribute('aria-label', L.rulePh);
+  $('rootPath').placeholder = L.rootPh; $('rootPath').setAttribute('aria-label', L.rootPh);
+  $('setDefaults').textContent = L.defaults; $('setCancel').textContent = L.cancel;
+  $('setAnyway').textContent = L.saveAnyway; $('setSave').textContent = L.save;
+  $('mOpen').textContent = L.open; $('mFolder').textContent = L.folder; $('mCopy').textContent = L.copy;
+  $('mRescan').textContent = L.rescan; $('mJump').textContent = L.jump;
+  $('up-open').textContent = L.up.open; $('upgrade-title').textContent = L.up.title; $('up-hint').textContent = L.up.hint;
+  $('up-drop-strong').textContent = L.up.dropStrong; $('up-drop-rest').textContent = L.up.dropRest;
+  $('up-dir-text').textContent = L.up.dir; $('up-rollback').textContent = L.up.rollback;
+}
 
+function showIndex(st) {
+  lastStatus = st;
+  if (typeof st.match_path === 'boolean' && st.match_path !== matchPath) {
+    matchPath = st.match_path;
+    $('help').textContent = matchPath ? L.help : L.helpNames;
+  }
+  if (cur < 0) renderPreview();
+  $('version').textContent = 'v' + st.version;
+  const parts = [];
+  if (st.state === 'scanning') parts.push(L.scanning(st.progress[0].toLocaleString(), st.progress[1].toLocaleString()));
+  else if (st.state === 'empty') parts.push(L.loading);
+  else parts.push(L.entries(st.entries.toLocaleString()));
+  if (st.unreadable_count) parts.push(L.unreadable(st.unreadable_count));
+  parts.push(L.watch[st.watch] || '');
+  $('index').textContent = parts.join(' · ');
+  if (alive) $('rescan').disabled = st.state !== 'ready';
+}
+let statusTimer = null, waitApply = false;
+function pollStatus() {
+  if (!alive) return;
+  api('/api/status').then(st => {
+    const was = lastStatus && lastStatus.state;
+    showIndex(st);
+    if (waitApply && !st.applying && st.state === 'ready') {
+      waitApply = false; search(true); setStatus(L.applied, 'ok');
+    } else if (was && was !== 'ready' && st.state === 'ready') search(true);
+    const next = st.state === 'ready' && !waitApply ? 10000 : (waitApply ? 300 : 1000);
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(pollStatus, next);
+  }).catch(() => { clearTimeout(statusTimer); statusTimer = setTimeout(pollStatus, 3000); });
+}
+
+function updateSortUi() {
   const v = sort + ':' + (desc ? 1 : 0);
   if (Array.from($('sort').options).some(o => o.value === v)) $('sort').value = v;
 }
@@ -932,10 +1014,33 @@ function select(k, focus) {
     if (focus) body.focus();
     tr.scrollIntoView({block: 'nearest'});
   }
-  ['open', 'folder', 'copy'].forEach(id => { $(id).disabled = cur < 0 || !alive; });
+  renderPreview();
   if (k >= rows.length - 20 && rows.length < count) loadMore();
 }
 
+function renderPreview() {
+  const r = rows[cur], box = $('pvContent'); box.textContent = '';
+  $('preview').setAttribute('aria-label', L.aria_preview);
+  $('pvActions').hidden = !r; $('pvKeys').hidden = !r;
+  ['open','folder','copy'].forEach(id => { $(id).disabled = !r || !alive; });
+  if (!r) {
+    const st = lastStatus || {};
+    box.append(upEl('h2',{},L.title));
+    const dl = upEl('dl',{});
+    [[L.pv_index_entries, st.entries], [L.pv_index_folders, st.dirs], [L.pv_index_watch, L.watch[st.watch] || L.loading]].forEach(([k,v]) => dl.append(upEl('dt',{},k),upEl('dd',{},v === undefined ? '—' : String(v))));
+    box.append(dl); return;
+  }
+  const head = upEl('div',{class:'pv-heading'}); head.append(iconSvg(r.category),upEl('h2',{},r.name));
+  const kind = r.folder ? L.pv_kind_folder : U('pv_kind_file',{ext:(r.name.split('.').pop() || '').toUpperCase()});
+  box.append(head, upEl('p',{class:'pv-type'},kind));
+  const path = upEl('div',{class:'pv-path',tabindex:'0'} ,r.path); box.append(path);
+  const nameHit = (r.name_html || '').includes('<mark>'), dirHit = (r.dir_html || '').includes('<mark>');
+  const hit = nameHit && dirHit ? L.pv_hit_both : nameHit ? L.pv_hit_name : dirHit ? L.pv_hit_path : '—';
+  const dl = upEl('dl',{});
+  [[L.pv_size,r.size_text || '—'],[L.pv_modified,r.modified || r.time],[L.pv_type,kind],[L.pv_hit,hit]].forEach(([k,v])=> dl.append(upEl('dt',{},k),upEl('dd',{},v)));
+  box.append(dl);
+  $('pvKeys').textContent = 'Enter ' + L.open + ' · Ctrl Enter ' + L.folder + ' · Ctrl Shift C ' + L.copy;
+}
 function search(keep) {
   if (!alive) return;
   const my = ++seq;

@@ -857,6 +857,34 @@ class Window:
         row.pack_start(over, True, True, 0)
         row.pack_start(self.scrollbar, False, False, 0)
 
+        self.preview = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        self.preview.get_style_context().add_class('preview')
+        self.preview.set_size_request(340, -1)
+        self.preview.set_no_show_all(True)
+        row.pack_start(self.preview, False, False, 0)
+        self.preview_widgets = {}
+        for key in ('name', 'type'):
+            lab = Gtk.Label(xalign=0)
+            lab.set_line_wrap(True)
+            lab.set_max_width_chars(30)
+            self.preview.pack_start(lab, False, False, 0)
+            self.preview_widgets[key] = lab
+        self.preview_path = Gtk.Entry()
+        self.preview_path.set_editable(False)
+        self.preview.pack_start(self.preview_path, False, False, 0)
+        self.preview_meta = Gtk.Label(xalign=0)
+        self.preview_meta.set_line_wrap(True)
+        self.preview.pack_start(self.preview_meta, False, False, 0)
+        self.preview_buttons = []
+        for key, cb in (('open', self.open_current), ('open_folder', self.open_folder),
+                        ('copy_path', self.copy_path), ('copy_file', self.copy_file)):
+            button = Gtk.Button(label=t(self.lang, key))
+            button.connect('clicked', lambda _b, callback=cb: callback())
+            self.preview.pack_start(button, False, False, 0)
+            self.preview_buttons.append(button)
+        self.preview.show_all()
+        self.preview.set_visible(self.size[0] >= 960)
+
         bar = self.bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         bar.set_margin_start(6)
         bar.set_margin_end(6)
@@ -1354,9 +1382,11 @@ class Window:
         return False
 
     def on_configure(self, win, _event):
+        width, height = win.get_size()
+        if hasattr(self, 'preview'):
+            self.preview.set_visible(width >= 960)
         if self.maximized:
             return False
-        width, height = win.get_size()
         # the folded height is never remembered; only the height with the list shown
         if self.expanded and height >= EXPANDED_MIN:
             self.size = (width, height)
@@ -1535,6 +1565,7 @@ class Window:
         self.sync_adjustment()
         self.fill()
         self.update_status()
+        self.render_preview()
 
     def start_versions(self):
         """Group similar versions in the result: small results at once, others in the background
@@ -1651,6 +1682,7 @@ class Window:
                 sel.unselect_all()
         finally:
             self.filling = False
+        self.render_preview()
 
     def tooltip(self, k, name, folder):
         """Tooltip of result row k: the full path, and for a similar version the size of its group
@@ -1716,6 +1748,33 @@ class Window:
         model, it = sel.get_selected()
         if it is not None:
             self.cur = self.top + model.get_path(it).get_indices()[0]
+        self.render_preview()
+
+    def render_preview(self):
+        path = self.current_path()
+        labels = self.preview_widgets
+        self.preview_path.set_visible(bool(path))
+        for button in self.preview_buttons:
+            button.set_visible(bool(path))
+            button.set_sensitive(bool(path))
+        if not path:
+            st = self.index.status()
+            labels['name'].set_text(core.text('app_name', self.lang))
+            labels['type'].set_text('')
+            self.preview_meta.set_text(core.text('pv_index_entries', self.lang) + ': ' + str(st['entries']) +
+                                       '\n' + core.text('pv_index_watch', self.lang) + ': ' + core.text('watch_' + st['watch'], self.lang))
+            return
+        name, folder, size, mtime = self.result.row(self.cur)
+        kind = core.text('pv_kind_folder', self.lang) if size < 0 else core.text('pv_kind_file', self.lang, ext=os.path.splitext(name)[1].lstrip('.').upper())
+        labels['name'].set_text(core.display(name))
+        labels['type'].set_text(kind)
+        self.preview_path.set_text(core.display(path))
+        name_hit = bool(core._ranges(core.display(name), self.clauses))
+        dir_hit = bool(core._ranges(core.short_dir(folder), self.clauses))
+        hit = 'pv_hit_both' if name_hit and dir_hit else 'pv_hit_name' if name_hit else 'pv_hit_path' if dir_hit else None
+        self.preview_meta.set_text('\n'.join(core.text(key, self.lang) + ': ' + value for key, value in
+            (('pv_size', core.human_size(size) or '—'), ('pv_modified', core.human_time(mtime)),
+             ('pv_type', kind), ('pv_hit', core.text(hit, self.lang) if hit else '—'))))
 
     def current_path(self):
         if self.result is not None and 0 <= self.cur < self.count():
