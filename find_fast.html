@@ -260,6 +260,15 @@ main.shell { width:100%; max-width:none; height:100dvh; margin:0; padding:0; dis
 #upgrade.card { flex:none; max-height:50vh; overflow:auto; margin:0; }
 #closed { position:fixed; inset:40% 10% auto; z-index:30; }
 @media(max-width:1079px) { .preview { display:none; } }
+.statusbar { flex:none; height:28px; margin:0; padding:0 14px; background:var(--surface-2); border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:nowrap; font-size:11.5px; font-variant-numeric:tabular-nums; }
+.statusbar > span { overflow:hidden; white-space:nowrap; text-overflow:ellipsis; min-width:0; }.st-right { display:flex; align-items:center; gap:6px; }.st-hints { color:var(--ink-3); }
+.dot { width:6px; height:6px; border-radius:50%; background:var(--ok); flex:none; }.dot.busy { background:var(--warn); }
+#progress { position:absolute; left:14px; right:14px; bottom:0; height:2px; overflow:hidden; opacity:0; pointer-events:none; }#progress.on { opacity:1; }
+#progress i { display:block; width:50%; height:2px; background:var(--accent); animation:scan 1.2s linear infinite; }
+@keyframes scan { from { transform:translateX(-100%); } to { transform:translateX(200%); } }
+#toast { position:fixed; bottom:46px; left:50%; transform:translateX(-50%); z-index:40; background:var(--ink); color:var(--surface); padding:7px 12px; max-width:90vw; overflow-wrap:anywhere; border-radius:8px; box-shadow:var(--shadow-2); }
+@media(max-width:859px) { .st-hints { display:none; } }
+@media(prefers-reduced-motion:reduce) { #progress i { animation:none; width:100%; } }
 </style>
 </head>
 <body>
@@ -428,6 +437,7 @@ main.shell { width:100%; max-width:none; height:100dvh; margin:0; padding:0; dis
     <div class="row"><button id="up-go" class="primary" type="button" hidden></button></div>
   </section>
   <div class="bar searchbar">
+    <div id="progress" aria-hidden="true"><i></i></div>
     <input id="q" type="search" autocomplete="off" spellcheck="false" autofocus role="combobox" aria-expanded="true" aria-controls="rows" aria-autocomplete="list" aria-label="搜索">
     <button id="gear" type="button" aria-label="设置" title="设置">⚙</button>
     <label for="sort" id="sortLabel">排序</label>
@@ -442,7 +452,6 @@ main.shell { width:100%; max-width:none; height:100dvh; margin:0; padding:0; dis
     </select>
   </div>
   <p class="help" id="help"></p>
-  <div id="status" role="status" aria-live="polite"></div>
   <div class="stage">
   <div class="listwrap">
     <div id="rows" role="listbox" tabindex="0"></div>
@@ -495,7 +504,8 @@ main.shell { width:100%; max-width:none; height:100dvh; margin:0; padding:0; dis
       <button type="button" id="setSave">保存</button>
     </div>
   </dialog>
-  <footer><span id="version"></span><span id="index"></span></footer>
+  <footer class="statusbar" role="status" aria-live="polite"><span id="count"></span><span class="st-hints">↑↓ · Enter · Ctrl Enter</span><span class="st-right"><i class="dot"></i><span id="indexState"></span><span id="version"></span></span></footer>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
 </main>
 <script>
 'use strict';
@@ -659,16 +669,16 @@ window.addEventListener('pagehide', () => {
   navigator.sendBeacon('/api/bye', new Blob([JSON.stringify({t: TOKEN, page: PAGE})], {type: 'text/plain'}));
 });
 
+let noticeTimer = null;
 function setStatus(text, kind) {
-  const s = $('status');
-  s.className = kind || '';
-  s.textContent = text;
+  const toast = $('toast');
+  toast.className = kind || ''; toast.textContent = text; toast.hidden = !text;
+  clearTimeout(noticeTimer); noticeTimer = setTimeout(() => { toast.hidden = true; }, 5000);
 }
 let versions = 'ready';
 function showCount(ms) {
-  let text = ms === undefined ? L.results(count.toLocaleString()) : L.results_ms(count.toLocaleString(), ms);
-  if (versions === 'too_many') text += ' · ' + L.verSkipped;
-  setStatus(text, '');
+  const text = !$('q').value ? L.ready : L.results_ms(count.toLocaleString(), ms === undefined ? '' : ms);
+  if ($('count').textContent !== text) $('count').textContent = text;
 }
 
 // ---------------------------------------------------------------- 升级
@@ -917,6 +927,8 @@ function applyLanguage(lang) {
   $('open').textContent = L.open; $('folder').textContent = L.folder; $('copy').textContent = L.copy;
   $('folder').title = L.locateTip; $('mFolder').title = L.locateTip;
   $('rescan').textContent = L.rescan;
+  $('moreLabel').setAttribute('aria-label', L.menu_more);
+  $('rule').textContent = L.rule;
   $('themeBtn').setAttribute('aria-label', L.theme);
   $('gear').setAttribute('aria-label', L.settings); $('gear').title = L.settings;
   $('setTitle').textContent = L.settings; $('setRootsH').textContent = L.setRoots; $('setExcludeH').textContent = L.setExclude;
@@ -948,7 +960,10 @@ function showIndex(st) {
   else parts.push(L.entries(st.entries.toLocaleString()));
   if (st.unreadable_count) parts.push(L.unreadable(st.unreadable_count));
   parts.push(L.watch[st.watch] || '');
-  $('index').textContent = parts.join(' · ');
+  const label = parts.join(' · ');
+  if ($('indexState').textContent !== label) $('indexState').textContent = label;
+  $('progress').classList.toggle('on', st.state === 'scanning');
+  document.querySelector('.dot').classList.toggle('busy', st.state !== 'ready');
   if (alive) $('rescan').disabled = st.state !== 'ready';
 }
 let statusTimer = null, waitApply = false;

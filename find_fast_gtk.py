@@ -777,7 +777,16 @@ class Window:
         theme.set_tooltip_text(core.text('theme', self.lang))
         theme.connect('clicked', lambda *_: self.switch_theme())
         top.pack_start(theme, False, False, 0)
-        box.pack_start(top, False, False, 0)
+        scan_overlay = Gtk.Overlay()
+        scan_overlay.add(top)
+        self.progress = Gtk.ProgressBar()
+        self.progress.get_style_context().add_class('scan')
+        self.progress.set_valign(Gtk.Align.END)
+        self.progress.set_no_show_all(True)
+        scan_overlay.add_overlay(self.progress)
+        scan_overlay.set_overlay_pass_through(self.progress, True)
+        box.pack_start(scan_overlay, False, False, 0)
+        GLib.timeout_add(100, self.pulse_scan)
         sorter = Gtk.ComboBoxText()
         for key, reverse in (('mtime', True), ('mtime', False), ('name', False), ('name', True), ('path', False), ('size', True), ('size', False)):
             sorter.append(key + ':' + str(int(reverse)), t(self.lang, 'col_' + key) + (' ↓' if reverse else ' ↑'))
@@ -886,6 +895,7 @@ class Window:
         self.preview.set_visible(self.size[0] >= 960)
 
         bar = self.bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        bar.get_style_context().add_class('statusbar')
         bar.set_margin_start(6)
         bar.set_margin_end(6)
         bar.set_margin_top(2)
@@ -2044,6 +2054,15 @@ class Window:
 
     def set_state(self, text):
         self.state.set_text(text)
+
+    def pulse_scan(self):
+        if self.closed:
+            return False
+        scanning = self.index.state == 'scanning'
+        self.progress.set_visible(scanning)
+        if scanning:
+            self.progress.pulse()
+        return True
 
     def update_state(self):
         st = self.index.status()
