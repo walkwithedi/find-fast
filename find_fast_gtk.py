@@ -223,15 +223,12 @@ UI = {
         'upgrade_missing': 'The upgrade module tool_upgrade.py is missing; unpack the whole tool folder again',
     },
 }
-COLUMNS = [('name', 'col_name'), ('path', 'col_path'), ('size', 'col_size'), ('mtime', 'col_mtime'),
-           ('locate', 'col_locate')]
 # clipboard formats offered by "copy file": file managers paste the file, other programs the path
 COPY_FILE_TARGETS = ('x-special/gnome-copied-files', 'text/uri-list', 'UTF8_STRING', 'text/plain;charset=utf-8',
                      'text/plain', 'TEXT', 'STRING')
-LOCATE_ICONS = ('find-location-symbolic', 'edit-find-symbolic', 'folder-open-symbolic', 'folder')
 UNFOCUSED_OPACITY = 0.7         # window opacity while another program has the focus (needs a compositor)
 COLUMN_WIDTHS = {'name': 300, 'path': 380, 'size': 90, 'mtime': 140, 'locate': 36}
-DATA_COLUMNS = ('name', 'path', 'size', 'mtime')   # default order; the locate column always comes last
+LEGACY_COLUMNS = ('name', 'path', 'size', 'mtime')   # default order; the locate column always comes last
 MIN_COLUMN_WIDTH = 24
 DEFAULT_SIZE = (960, 600)
 EXPANDED_MIN = 150              # a smaller window height is not remembered as the unfolded height
@@ -488,8 +485,8 @@ def toggle_command(here=None, home=None):
 
 def valid_order(order):
     """True for a list holding each data column once."""
-    return (isinstance(order, list) and len(order) == len(DATA_COLUMNS)
-            and all(isinstance(k, str) for k in order) and sorted(order) == sorted(DATA_COLUMNS))
+    return (isinstance(order, list) and len(order) == len(LEGACY_COLUMNS)
+            and all(isinstance(k, str) for k in order) and sorted(order) == sorted(LEGACY_COLUMNS))
 
 
 def accel_text(accel):
@@ -781,6 +778,16 @@ class Window:
         theme.connect('clicked', lambda *_: self.switch_theme())
         top.pack_start(theme, False, False, 0)
         box.pack_start(top, False, False, 0)
+        sorter = Gtk.ComboBoxText()
+        for key, reverse in (('mtime', True), ('mtime', False), ('name', False), ('name', True), ('path', False), ('size', True), ('size', False)):
+            sorter.append(key + ':' + str(int(reverse)), t(self.lang, 'col_' + key) + (' ↓' if reverse else ' ↑'))
+        sorter.set_active_id(self.sort + ':' + str(int(self.desc)))
+        def changed(combo):
+            key, reverse = combo.get_active_id().split(':')
+            self.sort, self.desc = key, reverse == '1'
+            self.run_search()
+        sorter.connect('changed', changed)
+        box.pack_start(sorter, False, False, 0)
         self.settings = None            # the open settings dialog
 
         row = self.list_area = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -797,55 +804,29 @@ class Window:
         tv.get_selection().set_mode(Gtk.SelectionMode.SINGLE)
         tv.set_vexpand(True)
         tv.set_hexpand(True)
-        self.columns = {}
-        tv.set_column_drag_function(self.column_drop_ok)
-        for i, (key, label) in enumerate(COLUMNS):
-            col = Gtk.TreeViewColumn(t(self.lang, label))
-            col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
-            if key == 'locate':
-                # a button-like icon at the end of every row
-                theme = Gtk.IconTheme.get_default()
-                icon = Gtk.CellRendererPixbuf()
-                icon.set_padding(2, 1)
-                icon.set_property('icon-name', next((n for n in LOCATE_ICONS if theme.has_icon(n)), 'folder'))
-                col.pack_start(icon, True)
-                head = Gtk.Image.new_from_icon_name(icon.get_property('icon-name'), Gtk.IconSize.MENU)
-                head.set_tooltip_text(t(self.lang, 'locate_tip'))
-                head.show()
-                col.set_widget(head)
-                col.set_fixed_width(self.column_width(key))
-                self.columns[key] = col
-                continue
-            col.set_resizable(True)
-            col.set_reorderable(True)
-            col.set_clickable(True)
-            col.connect('clicked', self.on_header, key)
-            if key == 'name':
-                icon = Gtk.CellRendererPixbuf()
-                icon.set_padding(2, 1)
-                col.pack_start(icon, False)
-                col.add_attribute(icon, 'icon-name', 0)
-                tag = self.tag_cell = Gtk.CellRendererText()
-                tag.set_padding(2, 1)
-                tag.set_property('scale', 0.85)         # dimmed by dim_tags: still read as plain text
-                col.pack_start(tag, False)
-                col.add_attribute(tag, 'text', COL_TAG)
-                col.set_expand(False)
-            cell = Gtk.CellRendererText()
-            cell.set_padding(4, 1)              # compact rows
-            cell.set_property('ellipsize', Pango.EllipsizeMode.MIDDLE if key == 'path' else Pango.EllipsizeMode.END)
-            if key in ('size', 'mtime'):
-                cell.set_property('xalign', 1.0 if key == 'size' else 0.0)
-            col.pack_start(cell, True)
-            col.add_attribute(cell, 'text', i + 1)
-            col.set_fixed_width(self.column_width(key))
-            if key == 'path':
-                col.set_expand(True)
-            self.columns[key] = col
-        for key in list(self.ui_state.get('order', DATA_COLUMNS)) + ['locate']:
-            tv.append_column(self.columns[key])
-        tv.connect('style-updated', lambda *_: self.dim_tags())
-        self.dim_tags()
+        tv.set_headers_visible(False)
+        self.row_col = Gtk.TreeViewColumn()
+        self.row_col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        self.row_col.set_expand(True)
+        icon = Gtk.CellRendererPixbuf()
+        icon.set_padding(6, 4)
+        self.row_col.pack_start(icon, False)
+        self.row_col.add_attribute(icon, 'icon-name', 0)
+        main = Gtk.CellRendererText()
+        main.set_property('ellipsize', Pango.EllipsizeMode.END)
+        main.set_fixed_size(-1, 46)
+        self.row_col.pack_start(main, True)
+        self.row_col.add_attribute(main, 'markup', 7)
+        self.meta_col = Gtk.TreeViewColumn()
+        self.meta_col.set_sizing(Gtk.TreeViewColumnSizing.FIXED)
+        self.meta_col.set_fixed_width(116)
+        meta = Gtk.CellRendererText()
+        meta.set_property('xalign', 1.0)
+        meta.set_fixed_size(-1, 46)
+        self.meta_col.pack_start(meta, True)
+        self.meta_col.add_attribute(meta, 'markup', 8)
+        tv.append_column(self.row_col)
+        tv.append_column(self.meta_col)
         tv.connect('scroll-event', self.on_scroll)
         tv.connect('key-press-event', self.on_tree_key)
         tv.connect('button-press-event', self.on_button)
@@ -913,7 +894,6 @@ class Window:
         w.connect('destroy', lambda *_: setattr(self, 'closed', True))
         self.accel = None
         self.apply_keys(self.keys)
-        self.update_sort_indicators()
         w.show_all()
         self.expanded = None
         self.apply_layout()
@@ -1357,28 +1337,6 @@ class Window:
 
     # ------------------------------------------------------------ interface state and opacity
 
-    def column_width(self, key):
-        return self.ui_state.get('columns', {}).get(key, COLUMN_WIDTHS[key])
-
-    def column_order(self):
-        """The data columns as shown, left to right."""
-        keys = {c: k for k, c in self.columns.items()}
-        return [keys[c] for c in self.tree.get_columns() if keys.get(c) in DATA_COLUMNS]
-
-    def set_column_order(self, order):
-        """Show the data columns in this order, the locate column last."""
-        if not valid_order(list(order)):
-            return
-        prev = None
-        for key in order:
-            self.tree.move_column_after(self.columns[key], prev)
-            prev = self.columns[key]
-
-    def column_drop_ok(self, _tree, column, prev, nxt):
-        """Columns dragged by their headers stay in front of the locate column."""
-        locate = self.columns.get('locate')
-        return column is not locate and prev is not locate and nxt is not None
-
     @staticmethod
     def on_wayland():
         return 'wayland' in type(Gdk.Display.get_default()).__name__.lower()
@@ -1425,7 +1383,7 @@ class Window:
         want = self.want_expanded()
         if want != self.expanded:
             if self.expanded:
-                for c in self.columns.values():     # keep widths dragged by hand
+                for c in (self.row_col, self.meta_col):     # keep widths dragged by hand
                     if c.get_width() > 0:
                         c.set_fixed_width(c.get_width())
             self.expanded = want
@@ -1490,9 +1448,7 @@ class Window:
     def ui_state_now(self):
         st = {'width': self.size[0], 'height': self.size[1], 'maximized': self.maximized,
               'sort': self.sort, 'desc': self.desc,
-              'columns': {k: (c.get_width() if self.expanded else 0) or c.get_fixed_width()
-                          for k, c in self.columns.items()},
-              'order': self.column_order()}
+              'layout': 'two-line'}
         if not self.on_wayland() and not self.maximized:
             st['x'], st['y'] = self.win.get_position()
         return st
@@ -1612,31 +1568,8 @@ class Window:
     def count(self):
         return len(self.result) if self.result is not None else 0
 
-    def on_header(self, _col, key):
-        if self.sort == key:
-            self.desc = not self.desc
-        else:
-            self.sort = key
-            self.desc = DEFAULT_DESC[key]
-        self.update_sort_indicators()
-        self.run_search()
-
-    def update_sort_indicators(self):
-        for key, col in self.columns.items():
-            col.set_sort_indicator(key == self.sort)
-            if key == self.sort:
-                col.set_sort_order(Gtk.SortType.DESCENDING if self.desc else Gtk.SortType.ASCENDING)
-
-    # ------------------------------------------------------------ virtual list
-
     def measure_row_height(self):
-        """Height of a row as drawn; an estimate until a row has been shown."""
-        if len(self.store) and self.tree.get_realized():
-            h = self.tree.get_background_area(Gtk.TreePath.new_first(), self.columns['name']).height
-            if h > 0:
-                return h, True
-        _x, _y, _w, h = self.columns['name'].cell_get_size()
-        return max(h, 24), False
+        return 48, True
 
     def on_area_allocate(self, _sw, alloc):
         self.area_height = alloc.height
@@ -1649,8 +1582,7 @@ class Window:
         if exact:
             self.row_height = h
         h = self.row_height or h
-        header = self.columns['name'].get_button().get_allocated_height() if self.tree.get_headers_visible() else 0
-        rows = max(1, (getattr(self, 'area_height', 0) - header) // h)
+        rows = max(1, getattr(self, 'area_height', 0) // 48)
         if rows != self.rows:
             self.rows = rows
             GLib.idle_add(self._after_resize)
@@ -1742,19 +1674,11 @@ class Window:
         ok, bx, by, _model, path, _it = tv.get_tooltip_context(x, y, keyboard)
         if not ok or path is None:
             return False
-        key = None
-        if not keyboard:
-            hit = tv.get_path_at_pos(bx, by)
-            if hit is not None:
-                key = next((k for k, c in self.columns.items() if c is hit[1]), None)
-        markup = self.tooltip_markup(path.get_indices()[0], key)
+        markup = self.tooltip_markup(path.get_indices()[0], None)
         if not markup:
             return False
         tooltip.set_markup(markup)
-        if key == 'locate':
-            tv.set_tooltip_cell(tooltip, path, self.columns['locate'], None)
-        else:
-            tv.set_tooltip_row(tooltip, path)
+        tv.set_tooltip_row(tooltip, path)
         return True
 
     def scroll_to(self, k):
@@ -1772,13 +1696,6 @@ class Window:
         self.adj.set_value(self.top)
         self.filling = False
         self.fill()
-
-    def dim_tags(self):
-        """The version tags in the theme's text colour, faded: a set colour, not an insensitive
-        cell, so that screen readers do not call them unavailable."""
-        color = self.tree.get_style_context().get_color(Gtk.StateFlags.NORMAL)
-        color.alpha *= TAG_ALPHA
-        self.tag_cell.set_property('foreground-rgba', color)
 
     def on_scroll(self, _tv, event):
         ok, dx, dy = event.get_scroll_deltas()
@@ -1886,11 +1803,6 @@ class Window:
         if hit is None:
             return False
         k = self.top + hit[0].get_indices()[0]
-        if event.button == 1 and event.type == Gdk.EventType.BUTTON_PRESS and hit[1] is self.columns['locate']:
-            self.cur = k
-            self.fill()
-            self.open_folder()
-            return True
         if event.button == 3:
             self.cur = k
             self.fill()
@@ -1915,7 +1827,7 @@ class Window:
         rect = None
         if self.top <= self.cur < self.top + len(self.store):
             rect = self.tree.get_cell_area(Gtk.TreePath.new_from_indices([self.cur - self.top]),
-                                           self.columns['name'])
+                                           self.row_col)
         if rect is not None and rect.height > 0:
             # below the selected row, at the left of its name (bin window coordinates)
             rect.x, rect.width = rect.x + 24, 1
@@ -2108,7 +2020,6 @@ class SettingsDialog:
         self.exclude = list(config.exclude)
         self.keys = load_keys(config)
         self.saved_toggle = self.keys['toggle']
-        self.order = window.column_order()
         self.recording = None           # action whose shortcut is being recorded
         lang = self.lang
         d = self.dialog = Gtk.Dialog(title=t(lang, 'settings'), transient_for=window.win, modal=True,
@@ -2161,17 +2072,6 @@ class SettingsDialog:
         self.match_path = Gtk.CheckButton(label=t(lang, 'set_match_path'))
         self.match_path.set_active(config.match_path())
         area.pack_start(self.match_path, False, False, 0)
-
-        area.pack_start(self.heading(t(lang, 'set_columns')), False, False, 0)
-        self.columns_box = self.list_box()
-        frame = Gtk.Frame()
-        frame.add(self.columns_box)
-        area.pack_start(frame, False, False, 0)
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        b = Gtk.Button(label=t(lang, 'col_defaults'))
-        b.connect('clicked', lambda *_: self.reset_columns())
-        row.pack_start(b, False, False, 0)
-        area.pack_start(row, False, False, 0)
 
         area.pack_start(self.heading(t(lang, 'keys')), False, False, 0)
         grid = Gtk.Grid(column_spacing=8, row_spacing=4)
@@ -2228,7 +2128,6 @@ class SettingsDialog:
         d.get_content_area().pack_start(self.problems, False, False, 0)
         self.refill_upgrade()
         self.refill()
-        self.refill_columns()
         self.refill_keys()
 
     def refill_upgrade(self):
@@ -2271,7 +2170,7 @@ class SettingsDialog:
         c = self.config
         return (core.tidy_scope(self.roots, self.exclude) != core.tidy_scope(c.roots, c.exclude)
                 or self.hidden.get_active() != c.hidden or self.match_path.get_active() != c.match_path()
-                or self.keys != load_keys(c) or list(self.order) != list(self.window.column_order()))
+                or self.keys != load_keys(c))
 
     def choose_upgrade(self, how):
         """A file chooser for the release zip or its unpacked folder; returns the path or None. Tests replace this."""
@@ -2375,58 +2274,11 @@ class SettingsDialog:
         self.roots, self.exclude = list(core.DEFAULT_ROOTS), list(core.DEFAULT_EXCLUDE)
         self.hidden.set_active(False)
         self.match_path.set_active(True)
-        self.order = list(DATA_COLUMNS)
         self.keys = dict(KEY_DEFAULTS, toggle=DEFAULT_TOGGLE)
         self.recording = None
         self.refill()
-        self.refill_columns()
         self.refill_keys()
         self.update_problems([])
-
-    def reset_columns(self):
-        self.order = list(DATA_COLUMNS)
-        self.refill_columns()
-
-    # column order
-
-    def refill_columns(self):
-        box = self.columns_box
-        for child in box.get_children():
-            box.remove(child)
-        last = len(self.order) - 1
-        for i, key in enumerate(self.order):
-            name = t(self.lang, 'col_' + key)
-            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            row.set_margin_start(6)
-            row.set_margin_end(2)
-            row.pack_start(Gtk.Label(label=name, xalign=0), True, True, 0)
-            for label, item, step, ok in (('col_up', 'col_up_item', -1, i > 0),
-                                          ('col_down', 'col_down_item', 1, i < last)):
-                b = Gtk.Button(label=t(self.lang, label))
-                b.set_relief(Gtk.ReliefStyle.NONE)
-                b.set_sensitive(ok)
-                b.get_accessible().set_name(t(self.lang, item, col=name))
-                b.connect('clicked', lambda _b, k=i, d=step: self.move_column(k, d))
-                row.pack_start(b, False, False, 0)
-            box.add(row)
-        box.show_all()
-
-    def move_column(self, k, step):
-        j = k + step
-        if 0 <= k < len(self.order) and 0 <= j < len(self.order):
-            self.order[k], self.order[j] = self.order[j], self.order[k]
-            self.refill_columns()
-            # keep the keyboard on the moved column's button in its new row
-            row = self.columns_box.get_row_at_index(j)
-            if row is not None:
-                buttons = [w for w in row.get_child().get_children() if isinstance(w, Gtk.Button)]
-                target = buttons[0] if step < 0 else buttons[1]
-                if not target.get_sensitive():
-                    target = buttons[1] if step < 0 else buttons[0]
-                target.grab_focus()
-
-
-    # shortcuts
 
     def key_label(self, accel):
         if not accel:
@@ -2554,7 +2406,6 @@ class SettingsDialog:
         ok = self.window.save_config(new) if same_scope else self.window.apply_scope(new)
         if not ok:
             return 'blocked'
-        self.window.set_column_order(self.order)
         if same_scope and new.match_path() != self.config.match_path():
             self.window.run_search(keep=True)
         self.window.apply_keys(self.keys)

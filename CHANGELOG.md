@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- 结果改为两行布局；删除表头排序、列顺序设置和行尾定位按钮。排序保留在独立控件中，定位保留在右键菜单中。
+
 ## 0.6.0
 
 - Window: Enter, Locate, Copy file and Copy path pressed right after typing first finish the search the box was waiting to run, so they act on the new results and not the previous ones.
