@@ -237,6 +237,7 @@ try { document.documentElement.dataset.theme = localStorage.getItem('find-fast.t
   #ctx button:hover, #ctx button:focus-visible { background:var(--sel); }
   #ctx hr { border:0; border-top:1px solid var(--line); margin:4px 0; }
   code { font-family:"Noto Sans Mono CJK SC","DejaVu Sans Mono",monospace; font-size:13px; }
+mark { background:var(--mark-bg); color:var(--mark-fg); border-radius:2px; }
 </style>
 </head>
 <body>
@@ -851,8 +852,10 @@ function renderRow(r) {
     tag.textContent = r.ver === 'newest' ? L.verNewest : L.verOlder;
     name.append(tag);
   }
-  name.append(document.createTextNode(r.name));
-  const dir = document.createElement('td'); dir.className = 'dir'; dir.textContent = r.dir;
+  const title = document.createElement('span');
+  if (r.name_html !== undefined) title.innerHTML = r.name_html; else title.textContent = r.name;
+  name.append(title);
+  const dir = document.createElement('td'); dir.className = 'dir'; if (r.dir_html !== undefined) dir.innerHTML = r.dir_html; else dir.textContent = r.dir;
   const size = document.createElement('td'); size.className = 'size'; size.textContent = r.size_text;
   const time = document.createElement('td'); time.className = 'time'; time.textContent = r.time;
   const loc = document.createElement('td'); loc.className = 'loc';

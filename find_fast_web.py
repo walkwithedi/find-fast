@@ -297,7 +297,7 @@ class WebState:
     def search(self, page, query, sort, desc, regex):
         res = self.index.search(query, sort, desc, regex)
         sid = secrets.token_hex(4)
-        holder = {'groups': None}
+        holder = {'groups': None, 'clauses': core.parse_query(query, regex)}
         sync = len(res) <= VERSIONS_SYNC or len(res) > core.VERSION_GROUP_LIMIT
         if sync:
             holder['groups'] = core.VersionGroups(res)
@@ -335,9 +335,13 @@ class WebState:
             target = os.path.join(folder, name) if size < 0 else folder
             out.append({'k': k, 'name': core.display(name), 'dir': core.display(folder),
                         'path': core.display(os.path.join(folder, name)), 'size': size,
-                        'size_text': core.human_size(size), 'mtime': mtime, 'time': core.human_time(mtime),
+                        'size_text': core.human_size(size), 'mtime': mtime, 'time': core.human_time_short(mtime), 'modified': core.human_time(mtime),
                         'folder': size < 0,
                         'can_exclude': target not in roots and any(core.under(target, r) for r in roots)})
+            out[-1]['dir_display'] = core.short_dir(folder)
+            out[-1]['name_html'], out[-1]['dir_html'] = core.highlight_row(
+                core.display(name), out[-1]['dir_display'], got[2]['clauses'])
+            out[-1]['category'] = core.category(name, size)
             mark = groups.mark(k) if groups is not None else None
             if mark:
                 newest = groups.newest(k)

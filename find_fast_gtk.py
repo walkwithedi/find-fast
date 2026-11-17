@@ -787,7 +787,7 @@ class Window:
         box.pack_start(row, True, True, 0)
 
         # icon name, name, folder, size, time, tooltip (Pango markup), similar-version tag
-        self.store = Gtk.ListStore(str, str, str, str, str, str, str)
+        self.store = Gtk.ListStore(str, str, str, str, str, str, str, str, str)
         tv = self.tree = Gtk.TreeView(model=self.store)
         tv.set_has_tooltip(True)
         tv.connect('query-tooltip', self.on_query_tooltip)
@@ -1561,6 +1561,7 @@ class Window:
         self.query = self.entry.get_text()
         self.searches += 1
         try:
+            self.clauses = core.parse_query(self.query)
             self.result = self.index.search(self.query, self.sort, self.desc)
             self.message = self.pinned
         except core.QueryError as e:
@@ -1697,6 +1698,12 @@ class Window:
                 values = ['folder' if size < 0 else 'text-x-generic', core.display(name), core.display(folder),
                           core.human_size(size), core.human_time(mtime), self.tooltip(k, name, folder),
                           t(self.lang, 'ver_' + mark) if mark else '']
+                name_markup = core.highlight(core.display(name), self.clauses, 'pango', self.mark_bg, self.mark_fg)
+                path_markup = core.highlight(core.short_dir(folder), self.clauses, 'pango', self.mark_bg, self.mark_fg)
+                tag = ' <span size="smaller">%s</span>' % GLib.markup_escape_text(values[6]) if mark else ''
+                values.extend([name_markup + tag + '\n<span size="smaller" foreground="%s">%s</span>' % (self.ink3, path_markup),
+                               GLib.markup_escape_text(core.human_size(size) or '—') + '\n<span size="smaller" foreground="%s">%s</span>' %
+                               (self.ink3, GLib.markup_escape_text(core.human_time_short(mtime, lang=self.lang)))])
                 if j < len(store):
                     store.set_row(store.get_iter(j), values)
                 else:

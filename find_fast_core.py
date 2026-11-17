@@ -2089,3 +2089,135 @@ def human_time(ts):
         return time.strftime('%Y-%m-%d %H:%M', time.localtime(ts))
     except (OverflowError, OSError, ValueError):
         return ''
+
+
+import html as _html
+
+_MARK_MAX = 24
+
+
+def _esc(s, mode):
+    if mode == 'html':
+        return _html.escape(s, quote=True)
+    return (s.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+             .replace('"', '&quot;').replace("'", '&apos;'))
+
+
+def _ranges(text, clauses):
+    low = text.lower()
+    out = []
+    for c in clauses:
+        if c.negate:
+            continue
+        for t in c.alts:
+            name = type(t).__name__
+            if name == 'AffixTerm':
+                spans = []
+                if t.head:
+                    spans.append((0, len(t.head)))
+                if t.tail:
+                    spans.append((len(text) - len(t.tail), len(text)))
+                for a, b in spans:
+                    if 0 <= a < b <= len(text) and low[a:b] == (t.head if a == 0 else t.tail).lower():
+                        out.append((a, b))
+            elif name == 'PatternTerm':
+                if getattr(t, 'rx', None) is not None:
+                    for m in t.rx.finditer(text):
+                        if m.end() > m.start():
+                            out.append((m.start(), m.end()))
+            elif name == 'ExtTerm':
+                for suf in t.suffixes:
+                    if low.endswith(suf) and len(text) >= len(suf):
+                        out.append((len(text) - len(suf), len(text)))
+                        break
+            elif getattr(t, 's', None):
+                start = 0
+                s = t.s.lower()
+                while True:
+                    i = low.find(s, start)
+                    if i < 0:
+                        break
+                    out.append((i, i + len(s)))
+                    start = i + len(s)
+    return out
+
+
+def _merge(rs):
+    rs = sorted(r for r in rs if r[1] > r[0])
+    out = []
+    for a, b in rs:
+        if out and a <= out[-1][1]:
+            out[-1] = (out[-1][0], max(out[-1][1], b))
+        else:
+            out.append((a, b))
+    return out[:_MARK_MAX]
+
+
+def highlight(text, clauses, mode='html', mark_bg=None, mark_fg=None):
+    if not text:
+        return ''
+    rs = _merge(_ranges(text, clauses)) if clauses else []
+    if not rs:
+        return _esc(text, mode)
+    bg = mark_bg or '#ffe9a8'
+    if mode == 'html':
+        open_t, close_t = '<mark>', '</mark>'
+    else:
+        open_t = '<span background="%s"%s>' % (bg, (' foreground="%s"' % mark_fg) if mark_fg else '')
+        close_t = '</span>'
+    parts, pos = [], 0
+    for a, b in rs:
+        parts.append(_esc(text[pos:a], mode))
+        parts.append(open_t + _esc(text[a:b], mode) + close_t)
+        pos = b
+    parts.append(_esc(text[pos:], mode))
+    return ''.join(parts)
+
+
+def highlight_row(name, dir_display, clauses):
+    name_html = highlight(name, clauses)
+    marked = {name[a:b].lower() for a, b in _merge(_ranges(name, clauses))}
+    rest = [c for c in clauses if not (not c.negate and any(
+        (getattr(t, 's', '') or '').lower() in marked for t in c.alts))]
+    dir_html = highlight(dir_display, rest) if rest else _esc(dir_display, 'html')
+    return name_html, dir_html
+
+
+def short_dir(folder, levels=2):
+    folder = to_tilde(display(folder))
+    parts = [p for p in folder.split('/') if p]
+    return '…/' + '/'.join(parts[-levels:]) if len(parts) > 3 else folder
+
+
+def human_time_short(ts, now=None, lang=None):
+    if ts <= 0:
+        return '—'
+    now = time.time() if now is None else now
+    delta = now - ts
+    if delta < -60:
+        return time.strftime('%Y-%m-%d', time.localtime(ts))
+    if delta < 60:
+        return text('time_now', lang)
+    if delta < 3600:
+        return text('time_min', lang, n=int(delta // 60))
+    if delta < 86400:
+        return text('time_hour', lang, n=int(delta // 3600))
+    if delta < 7 * 86400:
+        n = int(delta // 86400)
+        return text('time_day' if n == 1 else 'time_days', lang, n=n)
+    fmt = '%m-%d' if time.localtime(ts).tm_year == time.localtime(now).tm_year else '%Y-%m-%d'
+    return time.strftime(fmt, time.localtime(ts))
+
+
+def category(name, size=0):
+    if size < 0:
+        return 'folder'
+    ext = os.path.splitext(name)[1].lower().lstrip('.')
+    for cat, exts in (('doc', 'pdf doc docx xls xlsx ppt pptx odt txt md rtf csv'),
+                      ('image', 'png jpg jpeg gif svg webp bmp tif tiff'),
+                      ('archive', 'zip gz bz2 xz tar rar 7z'),
+                      ('code', 'py js ts tsx jsx html css json c h cpp java rs go sh'),
+                      ('audio', 'mp3 mp4 wav flac avi mkv mov ogg')):
+        if ext in exts.split():
+            return cat
+    return 'other'
