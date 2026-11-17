@@ -90,6 +90,12 @@ async function nextDialog(dialogs, before) {
   return dialogs[dialogs.length - 1] || '';
 }
 
+async function openUpgrade(page) {
+  await page.click('#moreBtn');
+  await page.click('#up-open');
+  await page.waitForFunction(() => document.getElementById('settings').open && !document.getElementById('paneUpgrade').hidden);
+}
+
 (async () => {
   const browser = await chromium.launch(process.env.CHROMIUM_PATH ? {executablePath: process.env.CHROMIUM_PATH} : {});
   const ctx = prepare();
@@ -110,9 +116,11 @@ async function nextDialog(dialogs, before) {
       new MutationObserver(() => window.recordStage(s.textContent)).observe(s, {childList: true, characterData: true, subtree: true});
     }));
     await page.goto(srv.url);
+    // the upgrade is the last part of the settings, also reached from the "more" menu
     await page.waitForFunction(() => document.getElementById('up-open').textContent === '升级');
-    await page.click('#up-open');
+    await openUpgrade(page);
     assert.ok(await page.isVisible('#upgrade'));
+    assert.strictEqual(await page.getAttribute('#tabUpgrade', 'aria-selected'), 'true');
     await page.waitForFunction(() => document.getElementById('up-rollback').title !== '');
     assert.ok(await page.isDisabled('#up-rollback'), 'no previous version yet');
     assert.strictEqual(await page.textContent('#up-rollback'), '退回上一版');
@@ -159,7 +167,7 @@ async function nextDialog(dialogs, before) {
     await page.waitForFunction(v => document.getElementById('version').textContent.includes(v.slice(1)), ctx.newVer);
     assert.ok(fs.existsSync(path.join(ctx.work, 'apps', '.find-fast.上一版', 'my-notes.txt')));
 
-    await page.click('#up-open');
+    await openUpgrade(page);
     await page.waitForFunction(() => !document.getElementById('up-rollback').disabled);
     const back = page.waitForEvent('load', {timeout: 60000}).catch(e => e);
     const nDialogsRollback = dialogs.length;
@@ -178,12 +186,14 @@ async function nextDialog(dialogs, before) {
     const p2 = await (await browser.newContext({bypassCSP: true})).newPage();
     await p2.goto(srv.url);
     await p2.waitForFunction(() => document.getElementById('up-open').textContent === 'Upgrade');
-    await p2.click('#up-open');
+    await openUpgrade(p2);
     assert.strictEqual(await p2.textContent('#up-rollback'), 'Roll back to previous version');
     await p2.setInputFiles('#up-file', ctx.zip);
     await p2.waitForFunction(() => /new version/.test(document.getElementById('up-report').textContent));
     assert.match(await p2.textContent('#up-go'), /^Upgrade to v/);
     // quitting removes a checked zip that was never applied
+    await p2.keyboard.press('Escape');
+    await p2.waitForFunction(() => !document.getElementById('settings').open);
     await p2.click('#quit');
     await new Promise(resolve => srv.proc.on('exit', resolve));
     assert.deepStrictEqual(leftUploads(), []);
