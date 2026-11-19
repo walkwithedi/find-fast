@@ -105,6 +105,8 @@ UI = {
         'hotkey_written': '已写入系统快捷键：{key}', 'hotkey_removed': '已删除系统里的唤起快捷键',
         'hotkey_failed': '保存失败：写入系统快捷键时出错（{error}）。请在系统设置的自定义快捷键里手动添加，命令填：{command}',
         'set_match_path': '搜索词也匹配路径（所在文件夹的名称）',
+        'set_auto_mounts': '自动包含所有本地数据盘', 'set_disks': '当前识别到：{disks}',
+        'set_no_disks': '当前没有识别到数据盘', 'more_fade': '失焦时半透明',
         'hotkey_default_set': '已设置唤起快捷键 {key}：随时按下即可打开或隐藏窗口，可在「设置」→「快捷键」里修改',
         'hotkey_default_taken': '设置默认唤起快捷键失败：{key} 已被桌面快捷键「{name}」占用。'
                                 '请在「设置」→「快捷键」→「唤起或隐藏窗口」里换一个组合键。',
@@ -198,6 +200,8 @@ UI = {
         'hotkey_failed': 'Save failed: the system shortcut could not be written ({error}). Add it by hand as a '
                          'custom shortcut in the system settings, with the command: {command}',
         'set_match_path': 'Search words also match the path (names of the folders above)',
+        'set_auto_mounts': 'Include all local data disks automatically', 'set_disks': 'Found now: {disks}',
+        'set_no_disks': 'No data disk found now', 'more_fade': 'Translucent when not focused',
         'hotkey_default_set': 'Show-or-hide shortcut set to {key}: press it anywhere to open or hide the window; '
                               'change it under Settings > Shortcuts',
         'hotkey_default_taken': 'Setting the default show-or-hide shortcut failed: {key} is already a desktop '
@@ -230,7 +234,8 @@ UI = {
 # clipboard formats offered by "copy file": file managers paste the file, other programs the path
 COPY_FILE_TARGETS = ('x-special/gnome-copied-files', 'text/uri-list', 'UTF8_STRING', 'text/plain;charset=utf-8',
                      'text/plain', 'TEXT', 'STRING')
-UNFOCUSED_OPACITY = 0.7         # window opacity while another program has the focus (needs a compositor)
+UNFOCUSED_OPACITY = 0.7         # window opacity while another program has the focus, when turned on in the
+                                # "more" menu (off by default; needs a compositor)
 DEFAULT_SIZE = (1080, 640)
 EXPANDED_MIN = 150              # a smaller window height is not remembered as the unfolded height
 FOLDED_HEIGHT = 90              # the window under an empty search box: the search row alone
@@ -610,7 +615,7 @@ def load_ui_state(path):
         num(key, 100, 20000)
     for key in ('x', 'y'):
         num(key, -100000, 100000)
-    for key in ('maximized', 'desc', 'dark'):
+    for key in ('maximized', 'desc', 'dark', 'fade'):
         if key in data:
             if isinstance(data[key], bool):
                 out[key] = data[key]
@@ -1018,16 +1023,23 @@ class Window:
             getattr(box, 'set_margin_' + side)(6)
         self.more_items = {}
         for key, label, cb in (('keys', 'more_keys', self.open_keys), ('theme', 'more_theme', self.toggle_theme),
+                               ('fade', 'more_fade', self.toggle_fade),
                                ('fold', 'more_fold', self.toggle_fold), ('rescan', 'rescan', self.rescan),
                                ('about', 'more_about', self.show_about)):
             b = Gtk.ModelButton(text=t(self.lang, label))
+            if key == 'fade':
+                b.set_property('role', Gtk.ButtonRole.CHECK)
             b.connect('clicked', lambda _b, f=cb: (pop.popdown(), f()))
             box.pack_start(b, False, False, 0)
             self.more_items[key] = b
         box.show_all()
         pop.add(box)
-        pop.connect('show', lambda *_: self.more_items['fold'].set_property(
-            'text', t(self.lang, 'more_unfold' if not self.expanded and self.entry.get_text() else 'more_fold')))
+
+        def on_show(*_):
+            self.more_items['fold'].set_property(
+                'text', t(self.lang, 'more_unfold' if not self.expanded and self.entry.get_text() else 'more_fold'))
+            self.more_items['fade'].set_property('active', self.fade_on())
+        pop.connect('show', on_show)
         return pop
 
     def build_sort_menu(self):
@@ -1375,7 +1387,7 @@ class Window:
         name, folder, size, _ = self.result.row(self.rk(self.cur))
         is_dir = size < 0
         target = os.path.join(folder, name) if is_dir else folder
-        roots = self.index.config.resolved_roots()
+        roots = self.index.roots()
         if target in roots or not any(core.under(target, r) for r in roots):
             return None, is_dir
         return target, is_dir
@@ -1728,6 +1740,8 @@ class Window:
               'sort': self.sort, 'desc': self.desc}
         if 'dark' in self.ui_state:
             st['dark'] = self.ui_state['dark']
+        if self.ui_state.get('fade'):
+            st['fade'] = True
         if not self.on_wayland() and not self.maximized:
             st['x'], st['y'] = self.win.get_position()
         return st
@@ -1750,9 +1764,22 @@ class Window:
             return True
         return any(top.is_active() and top.get_transient_for() is self.win for top in Gtk.Window.list_toplevels())
 
+    def fade_on(self):
+        """The window fades while another program has the focus (off unless turned on)."""
+        return bool(self.ui_state.get('fade'))
+
+    def toggle_fade(self):
+        self.ui_state['fade'] = not self.fade_on()
+        self.save_ui_state()
+        self.update_opacity()
+
     def update_opacity(self):
-        """Fade the window while another program has the focus; never without a compositor."""
+        """Fade the window while another program has the focus, when turned on; never without a
+        compositor."""
         if self.closed:
+            return False
+        if not self.fade_on():
+            Gtk.Widget.set_opacity(self.win, 1.0)
             return False
         if not self.composited():
             if not getattr(self, 'opacity_logged', False):
@@ -2759,6 +2786,18 @@ class SettingsDialog:
         self.match_path = Gtk.CheckButton(label=t(lang, 'set_match_path'))
         self.match_path.set_active(config.match_path())
         area.pack_start(self.match_path, False, False, 0)
+        self.auto_mounts = Gtk.CheckButton(label=t(lang, 'set_auto_mounts'))
+        self.auto_mounts.set_active(config.auto_mounts)
+        area.pack_start(self.auto_mounts, False, False, 0)
+        disks = [core.display(d) for d in window.index.disks()[0]]
+        self.disks_label = Gtk.Label(label=t(lang, 'set_disks', disks=('、' if lang == 'zh' else ', ').join(disks))
+                                     if disks else t(lang, 'set_no_disks'))
+        self.disks_label.set_xalign(0)
+        self.disks_label.set_line_wrap(True)
+        self.disks_label.set_selectable(True)
+        self.disks_label.set_margin_start(24)
+        self.disks_label.get_style_context().add_class('dim-label')
+        area.pack_start(self.disks_label, False, False, 0)
         area.pack_start(self.heading(t(lang, 'set_roots')), False, False, 0)
         self.roots_box = self.list_box()
         area.pack_start(self.scrolled(self.roots_box), True, True, 0)
@@ -2904,6 +2943,7 @@ class SettingsDialog:
         c = self.config
         return (core.tidy_scope(self.roots, self.exclude) != core.tidy_scope(c.roots, c.exclude)
                 or self.hidden.get_active() != c.hidden or self.match_path.get_active() != c.match_path()
+                or self.auto_mounts.get_active() != c.auto_mounts
                 or self.keys != load_keys(c) or self.chosen_sort() != (self.window.sort, self.window.desc))
 
     def choose_upgrade(self, how):
@@ -3008,6 +3048,7 @@ class SettingsDialog:
         self.roots, self.exclude = list(core.DEFAULT_ROOTS), list(core.DEFAULT_EXCLUDE)
         self.hidden.set_active(False)
         self.match_path.set_active(True)
+        self.auto_mounts.set_active(True)
         self.sort = core.SORT_CHOICES[0]
         self.keys = dict(KEY_DEFAULTS, toggle=DEFAULT_TOGGLE)
         self.recording = None
@@ -3124,7 +3165,8 @@ class SettingsDialog:
         """'saved', 'warn' (problems listed, not saved) or 'blocked' (cannot be saved)."""
         lang = self.lang
         roots, exclude = core.tidy_scope(self.roots, self.exclude)
-        problems = core.check_scope(roots, exclude, self.mounts)
+        auto = self.auto_mounts.get_active()
+        problems = core.check_scope(roots, exclude, self.mounts, self.window.index.disks()[0] if auto else ())
         blocked = []
         if any(code == 'no_roots' for _, _, code in problems):
             blocked.append(t(lang, 'set_blocked', reason=core.scope_problem_text('', 'no_roots', lang)))
@@ -3142,11 +3184,12 @@ class SettingsDialog:
         if warnings and not force:
             self.update_problems(warnings)
             return 'warn'
-        new = self.config.with_scope(roots, exclude, self.hidden.get_active())
+        new = self.config.with_scope(roots, exclude, self.hidden.get_active(), auto)
         new.other['keys'] = {k: v for k, v in self.keys.items() if v != KEY_DEFAULTS[k] or k == 'toggle'}
         new.other['match_path'] = self.match_path.get_active()
-        same_scope = (new.resolved_roots() == self.config.resolved_roots() and new.exclude == self.config.exclude
-                      and new.hidden == self.config.hidden)
+        index = self.window.index
+        same_scope = (index.roots(new) == index.roots(self.config) and new.exclude == self.config.exclude
+                      and new.hidden == self.config.hidden and new.auto_mounts == self.config.auto_mounts)
         ok = self.window.save_config(new) if same_scope else self.window.apply_scope(new)
         if not ok:
             return 'blocked'

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.8.0
+
+- Local data disks are indexed by default besides the folders in the settings: Settings → Indexed folders has Include all local data disks automatically (on by default, also for settings saved by earlier versions; `auto_mounts` in the settings file) and lists the disks found below it. A data disk is a mounted local disk file system (ext4, xfs, btrfs, ntfs, exfat, vfat and the like, and local FUSE ones) that is not the root partition, not a system folder (`/boot`, `/usr`, `/var`, `/opt`, `/snap`, `/tmp` and others; `/run/media` is allowed), not the home folder or a folder holding it, and not a second view of a disk already included. When the home folder lives on a data disk and is bound elsewhere (such as a data partition bound to `/home`), its copy on the disk is skipped so that files are not found twice. The mount table is watched while the tool runs: a disk mounted later is scanned, a removed one leaves the index. An exclusion inside a data disk is no longer reported as outside every indexed folder. Hidden entries stay off by default.
+- Window: fading while another program has the focus is off by default; More → Translucent when not focused turns it on (remembered in the interface state as `fade`).
+
 ## 0.7.0
 
 - Results: a row is the name over its folder (the home folder as `~`, a deep folder as `…/` and its last two levels), with the size over a short time at the right (just now, N min ago, N h ago, N days ago within a week, then the date; the full time is in the tooltip). Matches of the search words are marked in names and folders (`highlight`, `highlight_row`), worked out only for the rows shown; a word marked in the name is not marked again in the folder. Both the window and the browser page.

@@ -344,6 +344,7 @@
                   border-radius:var(--r-sm); background:var(--surface); color:var(--ink); font:var(--fs-label) var(--font); }
   .check { display:flex; align-items:flex-start; gap:9px; padding:7px 0; font-size:var(--fs-body); cursor:pointer; }
   .check input { margin:2px 0 0; width:15px; height:15px; accent-color:var(--accent); flex:none; }
+  .disks { margin:-4px 0 4px 24px; color:var(--ink-3); font-size:var(--fs-label); overflow-wrap:anywhere; }
   #setMsg { margin:0; padding:8px 16px 0; white-space:pre-line; font-size:var(--fs-label); flex:none; }
   #setMsg:empty { display:none; }
   #setMsg.ok { color:var(--ok); } #setMsg.warn { color:var(--warn); } #setMsg.bad { color:var(--bad); } #setMsg.info { color:var(--info); }
@@ -659,6 +660,8 @@
     <div class="set-pane" role="tabpanel" id="paneRoots" aria-labelledby="tabRoots">
       <label class="check"><input type="checkbox" id="setHidden"> <span id="setHiddenL">索引隐藏文件和文件夹</span></label>
       <label class="check"><input type="checkbox" id="setMatchPath"> <span id="setMatchPathL">搜索词也匹配路径（所在文件夹的名称）</span></label>
+      <label class="check"><input type="checkbox" id="setAutoMounts" aria-describedby="setDisks"> <span id="setAutoMountsL">自动包含所有本地数据盘</span></label>
+      <p class="disks" id="setDisks"></p>
       <h3 id="setRootsH">索引的文件夹</h3>
       <ul id="setRoots" class="items" aria-labelledby="setRootsH"></ul>
       <div class="fieldline">
@@ -928,7 +931,8 @@ const T = {
     search_failed: e => '搜索失败：' + e + '。请修改搜索词后再试。',
     rule: '关闭本页后服务数秒内自动退出；点「退出」立即结束。',
     settings: '设置', setRoots: '索引的文件夹', setExclude: '排除规则', setHidden: '索引隐藏文件和文件夹',
-    setMatchPath: '搜索词也匹配路径（所在文件夹的名称）', setSearch: '搜索', setUpgrade: '升级',
+    setMatchPath: '搜索词也匹配路径（所在文件夹的名称）', setAutoMounts: '自动包含所有本地数据盘',
+    setDisks: d => '当前识别到：' + d.join('、'), setNoDisks: '当前没有识别到数据盘', setSearch: '搜索', setUpgrade: '升级',
     setExcludeP: '名称规则（如 node_modules、*.tmp）排除所有同名条目；完整路径只排除那个文件夹。',
     setSort: '默认排序（保存在本浏览器）', setSyn: '语法速查',
     addFolder: '添加文件夹……', add: '添加', remove: '删除', removeItem: x => '删除 ' + x,
@@ -977,7 +981,9 @@ const T = {
     search_failed: e => 'Search failed: ' + e + '. Change the search and try again.',
     rule: 'Closing this page stops the service within seconds; Quit stops it at once.',
     settings: 'Settings', setRoots: 'Indexed folders', setExclude: 'Exclusions', setHidden: 'Index hidden files and folders',
-    setMatchPath: 'Search words also match the path (names of the folders above)', setSearch: 'Search', setUpgrade: 'Upgrade',
+    setMatchPath: 'Search words also match the path (names of the folders above)',
+    setAutoMounts: 'Include all local data disks automatically',
+    setDisks: d => 'Found now: ' + d.join(', '), setNoDisks: 'No data disk found now', setSearch: 'Search', setUpgrade: 'Upgrade',
     setExcludeP: 'A name rule (such as node_modules or *.tmp) leaves out every entry with that name; a full path leaves out that folder only.',
     setSort: 'Default order (kept in this browser)', setSyn: 'Syntax',
     addFolder: 'Add folder...', add: 'Add', remove: 'Remove', removeItem: x => 'Remove ' + x,
@@ -1479,6 +1485,7 @@ function applyLanguage(code) {
   $('tabSearch').textContent = L.setSearch; $('tabUpgrade').textContent = L.setUpgrade;
   $('setRootsH').textContent = L.setRoots; $('setExcludeH').textContent = L.setExclude; $('setExcludeP').textContent = L.setExcludeP;
   $('setHiddenL').textContent = L.setHidden; $('setMatchPathL').textContent = L.setMatchPath;
+  $('setAutoMountsL').textContent = L.setAutoMounts;
   $('setSortH').textContent = L.setSort; $('setSynH').textContent = L.setSyn;
   const sel = $('setSort');
   sel.textContent = '';
@@ -2278,12 +2285,19 @@ function openSettings(pane) {
     setRootsList = j.roots.slice(); setExcludeList = j.exclude.slice();
     $('setHidden').checked = j.hidden;
     $('setMatchPath').checked = j.match_path !== false;
+    $('setAutoMounts').checked = j.auto_mounts !== false;
+    renderDisks();
     $('setSort').value = String(Math.max(0, SORTS.findIndex(x => x[0] === sort && x[1] === desc)));
     usePicker(j.can_pick);
     renderSettings(); setMsg('');
     openDialog($('settings'), from && from !== document.body ? from : q);
     showPane(typeof pane === 'string' ? pane : 'Roots', true);
   }).catch(e => setStatus(L.saveFailed(e.message), 'bad'));
+}
+function renderDisks() {
+  const disks = (setData && setData.disks) || [];
+  const p = $('setDisks');
+  p.textContent = disks.length ? L.setDisks(disks) : L.setNoDisks;
 }
 function pick(list, button) {
   button.disabled = true;
@@ -2299,7 +2313,7 @@ function saveSettings(force) {
   const mp = $('setMatchPath').checked;
   const newSort = SORTS[Number($('setSort').value)] || SORTS[0];
   post('/api/settings', {roots: setRootsList, exclude: setExcludeList, hidden: $('setHidden').checked,
-                         match_path: mp, force: !!force})
+                         match_path: mp, auto_mounts: $('setAutoMounts').checked, force: !!force})
     .then(j => {
       if (j.saved) {
         $('settings').close();
@@ -2333,10 +2347,12 @@ $('setDefaults').addEventListener('click', () => {
   setRootsList = setData.defaults.roots.slice(); setExcludeList = setData.defaults.exclude.slice();
   $('setHidden').checked = setData.defaults.hidden;
   $('setMatchPath').checked = setData.defaults.match_path !== false;
+  $('setAutoMounts').checked = setData.defaults.auto_mounts !== false;
+  renderDisks();
   $('setSort').value = '0';
   renderSettings(); setMsg('');
 });
-['setMatchPath', 'setHidden'].forEach(id => $(id).addEventListener('change', () => { $('setAnyway').hidden = true; setMsg(''); }));
+['setMatchPath', 'setHidden', 'setAutoMounts'].forEach(id => $(id).addEventListener('change', () => { $('setAnyway').hidden = true; setMsg(''); }));
 $('setCancel').addEventListener('click', () => $('settings').close());
 $('setSave').addEventListener('click', () => saveSettings(false));
 $('setAnyway').addEventListener('click', () => saveSettings(true));

@@ -408,6 +408,37 @@ class GtkTest(unittest.TestCase):
         pump(0.05)
         self.assertIsNone(w.settings)
 
+    def test_data_disks_setting(self):
+        disk = os.path.join(self.tmp, 'disk')
+        os.makedirs(os.path.join(disk, 'archive'))
+        with open(os.path.join(disk, 'archive', 'disk-report.pdf'), 'wb') as f:
+            f.write(b'x')
+        self.index._disks = ([disk], [])
+        w = self.window()
+        self.wait_ready()
+        self.type('disk-report')
+        self.assertTrue(pump(until=lambda: w.count() == 1))
+        s = w.open_settings()
+        self.assertTrue(s.auto_mounts.get_active())
+        self.assertIn(disk, s.disks_label.get_text())
+        self.assertFalse(s.dirty())
+        s.auto_mounts.set_active(False)
+        self.assertTrue(s.dirty())
+        self.assertEqual(s.save(), 'saved')
+        self.wait_ready()
+        self.assertFalse(core.Config(os.path.join(self.tmp, 'config.json')).auto_mounts)
+        self.assertEqual(self.index.roots(), [self.root])
+        self.type('disk-report ')
+        self.assertTrue(pump(until=lambda: w.count() == 0))
+        s = w.open_settings()
+        s.restore_defaults()
+        self.assertTrue(s.auto_mounts.get_active())
+        s.dialog.destroy()
+        self.index._disks = ([], [])
+        s = w.open_settings()
+        self.assertEqual(s.disks_label.get_text(), ui.t('en', 'set_no_disks'))
+        s.dialog.destroy()
+
     def test_unsaved_settings_are_asked_about_before_an_upgrade(self):
         w = self.window()
         s = w.open_settings()
@@ -662,8 +693,20 @@ class GtkTest(unittest.TestCase):
         w = self.window()
         w.composited = lambda: True
         w.window_active = lambda: False
+        # off by default: the window stays opaque without the focus
+        self.assertFalse(w.fade_on())
         w.update_opacity()
+        self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), 1.0, places=2)
+        w.more.get_popover().show()
+        self.assertFalse(w.more_items['fade'].get_property('active'))
+        w.more.get_popover().hide()
+        w.more_items['fade'].clicked()
+        self.assertTrue(w.fade_on())
+        self.assertTrue(ui.load_ui_state(w.state_path).get('fade'))
         self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), ui.UNFOCUSED_OPACITY, places=2)
+        w.more.get_popover().show()
+        self.assertTrue(w.more_items['fade'].get_property('active'))
+        w.more.get_popover().hide()
         w.window_active = lambda: True
         w.update_opacity()
         self.assertAlmostEqual(ui.Gtk.Widget.get_opacity(w.win), 1.0, places=2)

@@ -213,26 +213,29 @@ class WebState:
     def settings(self):
         c = self.index.config
         return {'roots': c.roots, 'exclude': c.exclude, 'hidden': c.hidden, 'match_path': c.match_path(),
+                'auto_mounts': c.auto_mounts, 'disks': [core.display(d) for d in self.index.disks()[0]],
                 'defaults': {'roots': core.DEFAULT_ROOTS, 'exclude': core.DEFAULT_EXCLUDE, 'hidden': False,
-                             'match_path': True},
+                             'match_path': True, 'auto_mounts': True},
                 'can_pick': bool(shutil.which('zenity'))}
 
-    def save_settings(self, roots, exclude, hidden, force=False, match_path=None):
+    def save_settings(self, roots, exclude, hidden, force=False, match_path=None, auto_mounts=None):
         """{'saved': True, 'rescan': bool} or {'saved': False, 'problems': [...], 'blocked': bool}.
-        A change that keeps the index scope (only match_path) is saved without rescanning."""
+        A change that keeps the index scope (only match_path) is saved without rescanning.
+        auto_mounts None keeps the current setting."""
         roots, exclude = core.tidy_scope(roots, exclude)
-        problems = core.check_scope(roots, exclude, self.index.mounts)
+        c = self.index.config
+        auto = c.auto_mounts if auto_mounts is None else bool(auto_mounts)
+        problems = core.check_scope(roots, exclude, self.index.mounts, self.index.disks()[0] if auto else ())
         blocked = any(code == 'no_roots' for _, _, code in problems)
         if blocked or (problems and not force):
             lang = core.ui_language()
             return {'saved': False, 'blocked': blocked,
                     'problems': [core.scope_problem_text(item, code, lang) for _, item, code in problems]}
-        c = self.index.config
-        new = c.with_scope(roots, exclude, hidden)
+        new = c.with_scope(roots, exclude, hidden, auto)
         if match_path is not None:
             new.other['match_path'] = bool(match_path)
-        if (new.resolved_roots() == c.resolved_roots() and new.exclude == c.exclude
-                and new.hidden == c.hidden):
+        if (self.index.roots(new) == self.index.roots(c) and new.exclude == c.exclude
+                and new.hidden == c.hidden and new.auto_mounts == c.auto_mounts):
             new.save()
             with self.index.lock:
                 self.index.config = new
@@ -248,7 +251,7 @@ class WebState:
             return None
         name, folder, size, _ = got[1].row(k)
         target = os.path.join(folder, name) if size < 0 else folder
-        roots = self.index.config.resolved_roots()
+        roots = self.index.roots()
         if target in roots or not any(core.under(target, r) for r in roots):
             return ''
         c = self.index.config
@@ -373,7 +376,7 @@ class WebState:
         res, holder = got[1], got[2]
         groups, view, clauses = holder['groups'], holder['view'], holder['clauses']
         total = len(res) if view is None else len(view)
-        roots = self.index.config.resolved_roots()
+        roots = self.index.roots()
         lang = core.ui_language()
         now = time.time()
         out = []
@@ -589,7 +592,8 @@ class Handler(BaseHTTPRequestHandler):
                 out = st.save_settings([r for r in roots if isinstance(r, str)],
                                        [e for e in exclude if isinstance(e, str)],
                                        bool(data.get('hidden')), bool(data.get('force')),
-                                       data.get('match_path') if isinstance(data.get('match_path'), bool) else None)
+                                       data.get('match_path') if isinstance(data.get('match_path'), bool) else None,
+                                       data.get('auto_mounts') if isinstance(data.get('auto_mounts'), bool) else None)
             except OSError as e:
                 self.send_json(500, {'error': msg('save_failed', error=e.strerror or e)})
                 return

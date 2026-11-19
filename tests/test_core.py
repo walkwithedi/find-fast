@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import find_fast_core as core  # noqa: E402
@@ -637,6 +638,131 @@ class WatcherTest(TempTree):
             self.assertIsNotNone(real)
         finally:
             w.close()
+
+
+class DataDiskTest(TempTree):
+    """Local data disks found in the mount table. Placeholder tables: /x/h is the home folder,
+    /x/sys a system folder, /x/sys/rm the folder for removable disks inside it."""
+
+    HOME = '/x/h'
+
+    def found(self, lines):
+        return core.data_mounts([core.Mount(*line) for line in lines], home=self.HOME,
+                                system=('/x/sys',), removable=('/x/sys/rm',))
+
+    def test_read_mount_table(self):
+        p = os.path.join(self.tmp, 'mountinfo')
+        with open(p, 'w') as f:
+            f.write('22 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw\n'
+                    '30 22 8:17 / /x/my\\040disk rw shared:5 master:2 - vfat /dev/sdb1 rw\n'
+                    '31 22 8:2 /@d /x/d rw - btrfs /dev/sda2 rw\n'
+                    'broken line\n')
+        self.assertEqual(core.read_mount_table(p), [
+            core.Mount('/', 'ext4', '/', '8:1'),
+            core.Mount('/x/my disk', 'vfat', '/', '8:17'),
+            core.Mount('/x/d', 'btrfs', '/@d', '8:2')])
+        self.assertEqual(core.read_mount_table(os.path.join(self.tmp, 'none')), [])
+
+    def test_which_mounts_count(self):
+        points, aliases = self.found([
+            ('/', 'ext4', '/', '8:1'),
+            ('/x/sys/efi', 'vfat', '/', '8:2'),               # a system folder
+            ('/x', 'ext4', '/', '8:3'),                       # holds the home folder
+            ('/x/snap', 'squashfs', '/', '7:0'),
+            ('/x/net', 'nfs4', '/', '0:50'),
+            ('/x/t', 'tmpfs', '/', '0:30'),
+            ('/x/d1', 'xfs', '/', '8:5'),
+            ('/x/d2', 'ext4', '/', '8:6'),
+            ('/x/d2', 'tmpfs', '/', '0:31'),                  # mounted over: the tmpfs is in use
+            ('/x/sys/rm/u', 'exfat', '/', '8:17'),            # removable, though inside a system folder
+            ('/x/w', 'fuse.ntfs-3g', '/', '0:60'),
+            ('/x/b', 'ext4', '/sub', '8:5'),                  # a bind mount of /x/d1/sub
+        ])
+        self.assertEqual(points, ['/x/d1', '/x/sys/rm/u', '/x/w'])
+        self.assertEqual(aliases, [])
+
+    def test_home_on_a_data_partition_is_not_found_twice(self):
+        # /x/d holds the home folders; its h folder is bound to /x/h
+        points, aliases = self.found([
+            ('/', 'ext4', '/', '8:1'),
+            ('/x/d', 'ext4', '/', '8:2'),
+            ('/x/h', 'ext4', '/h', '8:2'),
+        ])
+        self.assertEqual(points, ['/x/d'])
+        self.assertEqual(aliases, ['/x/d/h'])
+        # a disk showing a folder inside the home folder is indexed with it
+        points, aliases = self.found([
+            ('/', 'ext4', '/', '8:1'),
+            ('/x/h', 'btrfs', '/@h', '8:2'),
+            ('/x/w', 'btrfs', '/@h/work', '8:2'),
+        ])
+        self.assertEqual((points, aliases), ([], []))
+
+    def disk_index(self, auto=True):
+        self.disk = os.path.join(self.tmp, 'disk')
+        touch(os.path.join(self.disk, 'archive', 'report-disk.pdf'), b'x', 1700000800)
+        touch(os.path.join(self.disk, 'h', 'report-copy.pdf'), b'x', 1700000900)
+        self.config.auto_mounts = auto
+        table = [core.Mount(self.disk, 'ext4', '/', '8:2'), core.Mount(self.root, 'ext4', '/h', '8:2')]
+        idx = core.Index(self.config, self.cache, mounts={}, mount_table=table)
+        idx._disks = core.data_mounts(table, home=self.root, system=())
+        return idx
+
+    def test_index_takes_in_the_disks(self):
+        idx = self.disk_index()
+        self.assertEqual(idx.roots(), sorted([self.root, self.disk]))
+        idx.refresh()
+        found = [idx.search('report').path(k) for k in range(len(idx.search('report')))]
+        self.assertIn(os.path.join(self.disk, 'archive', 'report-disk.pdf'), found)
+        # the home folder seen through the disk is skipped
+        self.assertNotIn(os.path.join(self.disk, 'h', 'report-copy.pdf'), found)
+        # turning the setting off drops the disk
+        self.assertEqual(idx.reconfigure(self.config.with_scope(self.config.roots, self.config.exclude, False, False)),
+                         'rescanned')
+        self.assertEqual(idx.roots(), [self.root])
+        self.assertEqual(self.names(idx.search('report-disk')), [])
+
+    def test_setting_off_ignores_the_disks(self):
+        idx = self.disk_index(auto=False)
+        self.assertEqual(idx.roots(), [self.root])
+        self.assertEqual(idx.disks()[0], [self.disk])
+
+    def test_mount_changes_followed(self):
+        idx = self.disk_index()
+        idx._disks = ([], [])
+        idx.refresh()
+        self.assertEqual(self.names(idx.search('report-disk')), [])
+        seen = []
+        idx.on_change = lambda: seen.append(1)
+        with mock.patch.object(core, 'SYSTEM_MOUNTS', ()):
+            idx.mount_table = [core.Mount(self.disk, 'ext4', '/', '8:2')]
+            idx._on_mounts_changed()
+            self.assertEqual(self.names(idx.search('report-disk')), ['report-disk.pdf'])
+            self.assertTrue(seen)
+            idx.mount_table = []
+            idx._on_mounts_changed()
+            self.assertEqual(self.names(idx.search('report-disk')), [])
+            # a change that leaves the disks as they were does not rescan
+            idx.refresh = lambda *a, **k: self.fail('rescanned')
+            idx._on_mounts_changed()
+
+    def test_config_setting(self):
+        self.assertTrue(core.Config('/nonexistent/c.json', {}).auto_mounts)
+        self.assertTrue(core.Config('/nonexistent/c.json', {'auto_mounts': 'no'}).auto_mounts)
+        path = os.path.join(self.tmp, 'c.json')
+        c = core.Config(path, {'roots': ['~'], 'auto_mounts': False})
+        self.assertFalse(c.with_scope(['~'], [], False).auto_mounts)
+        self.assertTrue(c.with_scope(['~'], [], False, True).auto_mounts)
+        c.save()
+        self.assertFalse(core.Config(path).auto_mounts)
+        self.assertNotIn('auto_mounts', core.Config(path).other)
+
+    def test_exclusion_on_a_disk_is_not_outside(self):
+        disk = os.path.join(self.tmp, 'disk2')
+        os.makedirs(os.path.join(disk, 'old'))
+        rule = os.path.join(disk, 'old')
+        self.assertIn(('exclude', rule, 'outside'), core.check_scope([self.root], [rule], mounts={}))
+        self.assertEqual(core.check_scope([self.root], [rule], mounts={}, disks=[disk]), [])
 
 
 class MiscTest(unittest.TestCase):
