@@ -28,7 +28,8 @@ function startServer(tmp, lang) {
   for (let i = 0; i < 450; i++) {
     touch(path.join(root, 'many', i % 3 ? 'b' : 'a', 'item-' + String(i).padStart(3, '0') + (i % 3 ? '.txt' : '.jpg')), '', 1500000000 + i);
   }
-  fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({roots: [root]}));
+  // the data disks of the machine running the tests stay out of the index
+  fs.writeFileSync(path.join(tmp, 'config.json'), JSON.stringify({roots: [root], auto_mounts: false}));
   const bin = path.join(tmp, 'bin');
   fs.mkdirSync(bin);
   const log = path.join(tmp, 'opened.txt');
@@ -322,6 +323,9 @@ async function linesOf(file, n) {
     await page.waitForFunction(() => document.getElementById('settings').open && document.querySelectorAll('#setRoots li').length === 1);
     assert.deepStrictEqual(await page.$$eval('#setNav [role=tab]', ts => ts.map(t => t.textContent)), ['索引的文件夹', '排除规则', '搜索', '升级']);
     assert.strictEqual(await page.textContent('#setRoots li span'), srv.root);
+    assert.strictEqual(await page.isChecked('#setAutoMounts'), false);
+    assert.match(await page.textContent('#setDisks'), /^(当前识别到：|当前没有识别到数据盘)/);
+    assert.strictEqual(await page.textContent('#setAutoMountsL'), '自动包含所有本地数据盘');
     await page.focus('#tabRoots');
     await page.keyboard.press('ArrowDown');
     assert.ok(await page.isVisible('#paneExclude'));

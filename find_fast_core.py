@@ -68,6 +68,15 @@ PSEUDO_FS = {'proc', 'sysfs', 'devtmpfs', 'devpts', 'cgroup', 'cgroup2', 'debugf
              'binfmt_misc', 'efivarfs', 'rpc_pipefs', 'nsfs', 'selinuxfs', 'ramfs'}
 # FUSE file systems that hold local data; every other fuse.* type is treated as remote.
 LOCAL_FUSE = {'fuse.ntfs-3g', 'fuse.exfat', 'fuse.ext4fuse', 'fuse.fuse-ext2', 'fuse.bindfs'}
+# Disk file systems whose mounts count as local data disks (indexed automatically when the
+# setting is on); squashfs (snap packages), overlay, tmpfs and the like are not.
+LOCAL_DISK_FS = {'ext2', 'ext3', 'ext4', 'xfs', 'btrfs', 'f2fs', 'jfs', 'reiserfs', 'zfs', 'nilfs2', 'bcachefs',
+                 'ntfs', 'ntfs3', 'exfat', 'vfat', 'msdos', 'hfs', 'hfsplus', 'apfs', 'udf', 'iso9660'} | LOCAL_FUSE
+# Mounts at or under these folders are system parts, not data disks (/run/media is allowed).
+SYSTEM_MOUNTS = ('/boot', '/usr', '/var', '/opt', '/snap', '/tmp', '/root', '/etc', '/proc', '/sys', '/dev', '/run',
+                 '/lib', '/lib64', '/bin', '/sbin', '/efi')
+REMOVABLE_MOUNTS = ('/run/media',)
+MOUNT_SETTLE = 1.0          # seconds of quiet after a mount change before the index follows it
 
 PROGRESS_EVERY = 0.5        # seconds between progress reports while scanning
 RACY_NS = 2 * 10 ** 9       # a folder changed this close to its listing is listed again next time
@@ -337,9 +346,13 @@ def write_private(path, data):
         raise
 
 
+SCOPE_KEYS = ('roots', 'exclude', 'hidden', 'auto_mounts')
+
+
 class Config:
     """roots: folders to index (~ allowed); exclude: names (wildcards allowed) or paths (with /)
-    to skip; hidden: also index names that start with a dot."""
+    to skip; hidden: also index names that start with a dot; auto_mounts: also index every
+    local data disk mounted now (see data_mounts)."""
 
     def __init__(self, path=CONFIG_FILE, data=None):
         self.path = path
@@ -358,8 +371,10 @@ class Config:
         self.roots = self._strings(data.get('roots'), DEFAULT_ROOTS)
         self.exclude = self._strings(data.get('exclude'), DEFAULT_EXCLUDE)
         self.hidden = bool(data.get('hidden', False))
+        auto = data.get('auto_mounts', True)
+        self.auto_mounts = auto if isinstance(auto, bool) else True
         # other keys (interface settings) are kept as they are and written back on save
-        self.other = {k: v for k, v in data.items() if k not in ('roots', 'exclude', 'hidden')}
+        self.other = {k: v for k, v in data.items() if k not in SCOPE_KEYS}
 
     @staticmethod
     def _strings(value, default):
@@ -369,13 +384,17 @@ class Config:
 
     def data(self):
         out = dict(self.other)
-        out.update({'roots': self.roots, 'exclude': self.exclude, 'hidden': self.hidden})
+        out.update({'roots': self.roots, 'exclude': self.exclude, 'hidden': self.hidden,
+                    'auto_mounts': self.auto_mounts})
         return out
 
-    def with_scope(self, roots, exclude, hidden):
-        """A copy of this configuration (same file, same other keys) with a new index scope."""
+    def with_scope(self, roots, exclude, hidden, auto_mounts=None):
+        """A copy of this configuration (same file, same other keys) with a new index scope;
+        auto_mounts None keeps the current value."""
         data = self.data()
         data.update({'roots': list(roots), 'exclude': list(exclude), 'hidden': bool(hidden)})
+        if auto_mounts is not None:
+            data['auto_mounts'] = bool(auto_mounts)
         return Config(self.path, data)
 
     def match_path(self):
@@ -386,10 +405,11 @@ class Config:
     def save(self):
         write_private(self.path, json.dumps(self.data(), ensure_ascii=False, indent=2).encode('utf-8'))
 
-    def resolved_roots(self):
-        """Absolute, existing roots; a root inside another root is dropped."""
+    def resolved_roots(self, extra=()):
+        """Absolute, existing roots (the settings' folders, then extra: the data disks found);
+        a root inside another root is dropped."""
         out = []
-        for r in self.roots:
+        for r in list(self.roots) + list(extra):
             p = os.path.normpath(os.path.expanduser(r.strip()))
             if os.path.isabs(p) and os.path.isdir(p):
                 out.append(p)
@@ -401,12 +421,16 @@ class Config:
         return kept
 
     def signature(self):
-        """Identifies the index a cache belongs to; another signature means a full rescan."""
+        """Identifies the index a cache belongs to; another signature means a full rescan.
+        The data disks found are not part of it: a disk that comes or goes is picked up by the
+        next (incremental) refresh."""
         return json.dumps({'roots': self.resolved_roots(), 'exclude': self.exclude, 'hidden': self.hidden},
                           sort_keys=True, ensure_ascii=False)
 
-    def excluder(self):
-        return Excluder(self.exclude, self.hidden)
+    def excluder(self, extra_paths=()):
+        """extra_paths: folders skipped besides the exclusions (copies of the home folder seen
+        through a data disk)."""
+        return Excluder(list(self.exclude) + list(extra_paths), self.hidden)
 
 
 # ---------------------------------------------------------------- settings checks
@@ -469,10 +493,11 @@ def under(path, folder):
     return path == folder or path.startswith(folder.rstrip('/') + '/')
 
 
-def check_scope(roots, exclude, mounts=None):
+def check_scope(roots, exclude, mounts=None, disks=()):
     """Problems with an index scope, as (list, item, code) tuples: list is 'roots' or 'exclude';
     code is 'no_roots' (nothing to index: may not be saved), 'missing', 'network', 'nested' or
-    'outside' (worth a warning; saving anyway is allowed)."""
+    'outside' (worth a warning; saving anyway is allowed). disks: data disks indexed besides
+    the roots (an exclusion inside one is not outside)."""
     mounts = read_mounts() if mounts is None else mounts
     if not roots:
         return [('roots', '', 'no_roots')]
@@ -493,7 +518,7 @@ def check_scope(roots, exclude, mounts=None):
         p = expand(e)
         if not os.path.exists(p):
             out.append(('exclude', e, 'missing'))
-        elif not any(under(p, q) for _, q in paths):
+        elif not any(under(p, q) for _, q in paths) and not any(under(p, d) for d in disks):
             out.append(('exclude', e, 'outside'))
     return out
 
@@ -550,6 +575,89 @@ def fs_excluded(fstype):
     if fstype in NETWORK_FS or fstype in PSEUDO_FS:
         return True
     return fstype.startswith('fuse.') and fstype not in LOCAL_FUSE
+
+
+Mount = collections.namedtuple('Mount', 'point fstype root dev')
+
+
+def read_mount_table(path='/proc/self/mountinfo'):
+    """[Mount] in mount order (a later mount on the same point hides the earlier one); empty
+    when the table cannot be read. root is the folder of the file system shown at the point
+    (not / for bind mounts and btrfs subvolumes); dev identifies the file system."""
+    out = []
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as f:
+            for line in f:
+                parts = line.split()
+                if '-' not in parts[6:]:
+                    continue
+                sep = parts.index('-', 6)
+                if len(parts) <= sep + 1 or len(parts) < 5:
+                    continue
+                out.append(Mount(_unescape_mount(parts[4]), parts[sep + 1], _unescape_mount(parts[3]), parts[2]))
+    except OSError as e:
+        log.warning('cannot read %s: %s', path, e)
+    return out
+
+
+def _rebase(path, old, new):
+    """path (under old) moved to under new."""
+    rel = path[len(old.rstrip('/')):].lstrip('/')
+    return os.path.join(new, rel) if rel else new
+
+
+def _home_location(table, home):
+    """(dev, folder inside that file system) where the home folder lives, or None."""
+    best = None
+    for m in table:
+        if under(home, m.point) and (best is None or len(m.point.rstrip('/')) >= len(best.point.rstrip('/'))):
+            best = m
+    if best is None:
+        return None
+    return best.dev, _rebase(home, best.point, best.root)
+
+
+def data_mounts(table, home=None, system=None, removable=REMOVABLE_MOUNTS):
+    """Local data disks to index besides the folders in the settings: (points, aliases).
+
+    points: mount points of local disk file systems that are not the root partition, not
+    system folders (/boot, /usr, /var, /opt, ...; /run/media is allowed), not the home folder
+    or a folder holding it, and not a second view (bind mount) of a disk already included.
+    aliases: folders inside those disks that show the home folder again (for example a
+    data partition whose home folder is bind-mounted at /home); they are skipped like
+    exclusions so that files are not found twice. system: the system folders (SYSTEM_MOUNTS);
+    removable: folders inside them that still hold data disks."""
+    home = os.path.normpath(home or HOME)
+    system = SYSTEM_MOUNTS if system is None else system
+    top = {}
+    for m in table:
+        top[m.point] = m             # the last mount on a point is the one in use
+    cands = []
+    for p, m in top.items():
+        if m.fstype not in LOCAL_DISK_FS or p == '/' or not os.path.isabs(p):
+            continue
+        if any(under(p, s) for s in system) and not any(under(p, r) for r in removable):
+            continue
+        if under(home, p):
+            continue
+        cands.append(m)
+    cands.sort(key=lambda m: (len(m.root.rstrip('/')), len(m.point), m.point))
+    home_at = _home_location(list(top.values()), home)
+    kept = []
+    for m in cands:
+        # another mount already shows the folder this one shows (or a folder holding it)
+        if any(k.dev == m.dev and under(m.root, k.root) for k in kept):
+            continue
+        # the folder is inside the home folder, which is indexed anyway
+        if home_at is not None and m.dev == home_at[0] and under(m.root, home_at[1]):
+            continue
+        kept.append(m)
+    aliases = []
+    if home_at is not None:
+        for m in kept:
+            if m.dev == home_at[0] and under(home_at[1], m.root):
+                aliases.append(_rebase(home_at[1], m.root, m.point))
+    return sorted(m.point for m in kept), sorted(aliases)
 
 
 # ---------------------------------------------------------------- the index
@@ -1609,10 +1717,15 @@ def merge_extra(base, ordered, extra, hits, sort, desc):
 class Index:
     """The index in use: a Base, an overlay of changes, a cache file, background refresh."""
 
-    def __init__(self, config=None, cache_path=CACHE_FILE, mounts=None):
+    def __init__(self, config=None, cache_path=CACHE_FILE, mounts=None, mount_table=None):
+        """mounts, mount_table: fixed mount tables (tests); None reads the system's each time.
+        With mounts given and no mount_table, no data disk is found."""
         self.config = config or Config()
         self.cache_path = cache_path
         self.mounts = mounts
+        self.mount_table = mount_table
+        self._disks = None              # (points, aliases) of the data disks found
+        self.mount_watch = None
         self.lock = threading.RLock()
         self.base = empty_base()
         self._reset_overlay()
@@ -1665,8 +1778,7 @@ class Index:
             def progress(dirs, files):
                 self.progress = (dirs, files)
                 self._notify()
-            records, errors, changed = scan(self.config.resolved_roots(), self.config.excluder(),
-                                            self.mounts, old, progress, stop)
+            records, errors, changed = scan(self.roots(), self.excluder(), self.mounts, old, progress, stop)
             if changed:
                 base = build_base(records)
                 del records
@@ -1710,7 +1822,7 @@ class Index:
             old = self.config
             self.config = config
             ready = self.state == 'ready'
-        same_roots = old.resolved_roots() == config.resolved_roots()
+        same_roots = self.roots(old) == self.roots(config)
         added_only = set(old.exclude) <= set(config.exclude)
         if same_roots and old.hidden == config.hidden and added_only and ready:
             if set(old.exclude) == set(config.exclude):
@@ -1743,7 +1855,7 @@ class Index:
         t = time.monotonic()
         with self.lock:
             old, extra_dirs, dead = self.base, dict(self.extra_dirs), set(self.dead)
-            roots, exc = self.config.resolved_roots(), self.config.excluder()
+            roots, exc = self.roots(), self.excluder()
         records, relist = prune_records(old, extra_dirs, dead, roots, exc)
         base = build_base(records)
         del records
@@ -1768,6 +1880,49 @@ class Index:
                 cb()
             except Exception:
                 log.exception('change callback failed')
+
+    # scope: the settings' folders and the data disks found
+
+    def disks(self, refresh=False):
+        """(points, aliases) of the local data disks mounted now (see data_mounts), whatever
+        the setting; kept until the mount table changes."""
+        if self._disks is None or refresh:
+            if self.mount_table is not None:
+                table = self.mount_table
+            elif self.mounts is not None:
+                table = []
+            else:
+                table = read_mount_table()
+            self._disks = data_mounts(table)
+        return self._disks
+
+    def roots(self, config=None):
+        """Folders scanned: the settings' folders and, when the setting is on, the data disks."""
+        config = config or self.config
+        return config.resolved_roots(self.disks()[0] if config.auto_mounts else ())
+
+    def excluder(self, config=None):
+        config = config or self.config
+        return config.excluder(self.disks()[1] if config.auto_mounts else ())
+
+    def _on_mounts_changed(self):
+        """The mount table changed: when the data disks found differ, follow them with an
+        incremental refresh (a new disk is scanned, a removed one leaves the index)."""
+        before = self._disks
+        now = self.disks(refresh=True)
+        if now == before:
+            return
+        log.info('data disks now: %s', ', '.join(now[0]) or '-')
+        self._notify()
+        if not self.config.auto_mounts:
+            return
+        while self.state == 'scanning':
+            w = self.mount_watch
+            if w is not None and w.stopped.wait(0.2):
+                return
+            if w is None:
+                time.sleep(0.2)
+        self.refresh_and_watch()
 
     # overlay
 
@@ -1804,8 +1959,8 @@ class Index:
             self.watcher.remove_tree(d)
 
     def _covered(self, d):
-        roots = self.config.resolved_roots()
-        exc = self.config.excluder()
+        roots = self.roots()
+        exc = self.excluder()
         if not any(d == r or d.startswith(r.rstrip('/') + '/') for r in roots):
             return False
         if exc.skip_path(d):
@@ -1820,7 +1975,7 @@ class Index:
     def apply_changes(self, dirs):
         """Re-list each changed folder; add or remove subtrees whose folders appeared or vanished."""
         mounts = read_mounts() if self.mounts is None else self.mounts
-        exc = self.config.excluder()
+        exc = self.excluder()
         added = []
         with self.lock:
             if self.touched is not None:
@@ -1928,7 +2083,10 @@ class Index:
     # watching
 
     def start_watching(self):
-        """Watch every indexed folder with inotify in the background; False when unavailable."""
+        """Watch every indexed folder with inotify in the background, and the mount table for
+        data disks that come and go; False when inotify is unavailable."""
+        if self.mount_watch is None and self.mounts is None and self.mount_table is None:
+            self.mount_watch = MountWatch(self._on_mounts_changed)
         if self.watcher is None:
             try:
                 self.watcher = Watcher(self._on_dirty)
@@ -1953,9 +2111,56 @@ class Index:
         return done
 
     def close(self):
+        if self.mount_watch is not None:
+            self.mount_watch.close()
+            self.mount_watch = None
         if self.watcher is not None:
             self.watcher.close()
             self.watcher = None
+
+
+class MountWatch:
+    """Calls on_change (from its own thread) after the mount table changed and stayed quiet for
+    MOUNT_SETTLE seconds. The kernel marks /proc/self/mounts readable with POLLPRI on every
+    mount and unmount."""
+
+    def __init__(self, on_change, path='/proc/self/mounts'):
+        self.on_change = on_change
+        self.path = path
+        self.stopped = threading.Event()
+        self.thread = threading.Thread(target=self._run, name='mount-watch', daemon=True)
+        self.thread.start()
+
+    def _run(self):
+        try:
+            f = open(self.path, 'rb')
+        except OSError as e:
+            log.warning('cannot watch %s: %s', self.path, e)
+            return
+        try:
+            poller = select.poll()
+            poller.register(f.fileno(), select.POLLPRI | select.POLLERR)
+            f.read()
+            while not self.stopped.is_set():
+                if not poller.poll(500):
+                    continue
+                f.seek(0)
+                f.read()
+                # wait until the table stays the same for a while (a disk often brings several mounts)
+                while not self.stopped.is_set() and poller.poll(int(MOUNT_SETTLE * 1000)):
+                    f.seek(0)
+                    f.read()
+                if self.stopped.is_set():
+                    break
+                try:
+                    self.on_change()
+                except Exception:
+                    log.exception('mount change handling failed')
+        finally:
+            f.close()
+
+    def close(self):
+        self.stopped.set()
 
 
 # ---------------------------------------------------------------- inotify

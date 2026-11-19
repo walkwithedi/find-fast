@@ -237,6 +237,31 @@ class WebTest(unittest.TestCase):
         self.assertEqual(self.search('old 2019')[1]['count'], 0)
         self.assertFalse(core.Config(os.path.join(self.tmp, 'config.json')).match_path())
 
+    def test_data_disks_setting(self):
+        disk = os.path.join(self.tmp, 'disk')
+        os.makedirs(os.path.join(disk, 'archive'))
+        with open(os.path.join(disk, 'archive', 'disk-report.pdf'), 'wb') as f:
+            f.write(b'x')
+        self.index._disks = ([disk], [])
+        code, j = self.req('GET', '/api/settings')
+        self.assertEqual((j['auto_mounts'], j['defaults']['auto_mounts'], j['disks']), (True, True, [disk]))
+        self.st.rescan()
+        self.wait_ready()
+        self.assertEqual(self.search('disk-report')[1]['count'], 1)
+        # an exclusion on the disk is inside the scope
+        body = {'roots': j['roots'], 'exclude': j['exclude'] + [os.path.join(disk, 'archive')], 'hidden': False}
+        code, out = self.req('POST', '/api/settings', body)
+        self.assertEqual((code, out), (200, {'saved': True, 'rescan': True}))
+        self.wait_ready()
+        self.assertEqual(self.search('disk-report')[1]['count'], 0)
+        body = {'roots': j['roots'], 'exclude': j['exclude'], 'hidden': False, 'auto_mounts': False}
+        code, out = self.req('POST', '/api/settings', body)
+        self.assertEqual((code, out), (200, {'saved': True, 'rescan': True}))
+        self.wait_ready()
+        self.assertFalse(core.Config(os.path.join(self.tmp, 'config.json')).auto_mounts)
+        self.assertEqual(self.index.roots(), [self.root])
+        self.assertFalse(self.req('GET', '/api/settings')[1]['auto_mounts'])
+
     def test_notice_in_status(self):
         self.assertNotIn('notice', self.req('GET', '/api/status')[1])
         self.st.notice = ('note', 'warn')

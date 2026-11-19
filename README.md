@@ -84,11 +84,11 @@ Plain words match the whole path: `atlas 28` finds `~/Documents/Atlas/report 28.
 - Right click or the Menu key (Shift+F10; the menu opens below the selected row), in three groups: open, locate, copy path, copy file (each with its key); Exclude this folder (folder rows) or Exclude the containing folder (file rows), Go to the newest version (on Newer exists rows); rescan. Excluding asks first, naming the folder and how many entries leave the index; when that folder is an indexed folder itself the item cannot be chosen and its tooltip says why.
 - Hovering a result row shows its full path and modification time.
 - Similar versions: several versions of one file (copies, copies saved with a date or version number, drafts and finals) form a group; the newest by modification time is tagged Newest after its name and the others Newer exists. Results are shown as usual, not folded. Hovering adds a line with the group size and the newest one; right-click a Newer exists row for Go to the newest version. The rules are under "Similar versions" below.
-- The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below. The More menu next to it has Shortcuts and syntax, Switch appearance (the theme's dark or light variant, remembered), Fold to a search box, Rescan and About.
+- The gear button beside the search box, or Ctrl+, opens Settings; see "What is indexed, and settings" below. The More menu next to it has Shortcuts and syntax, Switch appearance (the theme's dark or light variant, remembered), Translucent when not focused, Fold to a search box, Rescan and About.
 - Results can be dragged into other programs.
 - F5 rescans (the status bar says it started, or to try again later while a scan runs); Ctrl+, opens Settings; Ctrl+L goes to the search box.
 - Esc: in the list it goes back to the search box; with text in the box it clears it (which folds the list); in an empty box it hides the window when a global show-or-hide shortcut is set, and closes it otherwise.
-- While another program has the focus the window is 70 % opaque, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
+- The window stays opaque. More → Translucent when not focused (off by default, remembered) makes it 70 % opaque while another program has the focus, and opaque again on return; the window's own context menu and dialogs do not count. This needs a desktop compositor; without one the window stays opaque.
 - Window size, maximised state, position, sort and an appearance switched by hand are remembered on close and restored next time, in `~/.config/find-fast/ui-state.json` (mode 600), apart from the settings and without effect on the index. A damaged file or bad values fall back to defaults; column widths and order kept by earlier versions are no longer used; a remembered position that is no longer on a monitor, or any position under Wayland (where programs cannot place windows), is left to the desktop. The browser page is not affected.
 - With an empty search box only the search row shows and the window becomes 90 pixels high where it is; the first character typed unfolds the result list to the height it last had unfolded, also when nothing matches (it then says so). Clearing the box, Esc, or More → Fold to a search box folds it again. A maximised window does not fold. While folded, the right end of the search box shows "N items" or "Indexing 42%", and messages such as copy results or errors for a few seconds; hovering the box shows the full index state and the version. When the window is too narrow for the search hint beside that text, the box shows only "Search..." and the hint moves into the tooltip.
 - While the list shows, the status bar is the one place that counts results: the number and the time taken (or a message for a few seconds) at the left, the common keys in the middle (hidden below 860 pixels), and the update mode (live or periodic), the number of entries, scan progress, unreadable folders and the version at the right, after a dot that changes colour when folders are unreadable or only updated periodically. During a scan a 2-pixel progress line runs along the lower edge of the search row without moving anything.
@@ -148,17 +148,19 @@ On the command line: `python3 find_fast.py --upgrade find-fast-vX.Y.Z.zip` shows
 
 ## What is indexed, and settings
 
-By default the home folder and local disks mounted under `/media` and `/mnt`. Network mounts (nfs, cifs/smb, sshfs and other FUSE file systems except local ones such as ntfs-3g and exfat) and pseudo file systems such as `/proc` and `/sys` are skipped, and symbolic links to folders are not followed.
+By default the home folder, local disks mounted under `/media` and `/mnt`, and every other local data disk mounted now (see below). Network mounts (nfs, cifs/smb, sshfs and other FUSE file systems except local ones such as ntfs-3g and exfat) and pseudo file systems such as `/proc` and `/sys` are skipped, and symbolic links to folders are not followed.
 
 The gear button beside the search box (or Ctrl+,) opens Settings, in four parts:
 
-- Indexed folders: Index hidden files and folders; Search words also match the path (on by default, plain words are looked for in names and in the names of the folders above; off, in names only; changing it does not rescan); the folder list, where any can be removed and Add folder... picks one in the system folder chooser.
+- Indexed folders: Index hidden files and folders; Search words also match the path (on by default, plain words are looked for in names and in the names of the folders above; off, in names only; changing it does not rescan); Include all local data disks automatically (on by default) with the disks found now listed below it; the folder list, where any can be removed and Add folder... picks one in the system folder chooser.
 - Exclusions: remove any; Add folder... excludes a chosen folder by path, or type a name rule (such as `node_modules` or `*.tmp`) and choose Add.
 - Search: the default order (kept with the interface state, not in the settings file) and a syntax summary; the window's shortcuts are on this page too.
 - Upgrade: see "Upgrade" above.
 - Restore defaults puts the default values in the panel; nothing is written until Save.
 
 Saving checks first: an empty folder list cannot be saved; a folder that does not exist, one on a network mount, one inside another indexed folder, or an exclusion outside every indexed folder is listed with the reason, and Save anyway saves regardless. The same folder written two ways counts once, and folders under home are written as `~/...`.
+
+Local data disks are mounted local disk file systems (ext4, xfs, btrfs, ntfs, exfat, vfat and the like, and local FUSE ones) other than the root partition, system folders (`/boot`, `/usr`, `/var`, `/opt`, `/snap`, `/tmp`, `/root`, `/etc`, `/run` except `/run/media`, and the like), the home folder or a folder holding it, and a second view (bind mount) of a disk already included. When the home folder lives on a data disk and is bound elsewhere, for example a data partition bound to `/home`, its copy on the disk is skipped so that files are not found twice. The mount table is watched while the tool runs: a disk mounted later is scanned, and a removed one leaves the index. To leave one disk out, add its path as an exclusion.
 
 The index is updated in the background right after saving, and searching goes on meanwhile: when exclusions were only added, matching entries are dropped from the index without a rescan; other changes rescan (turning hidden entries on or removing an exclusion lists every folder again). Saving during a scan stops it and starts over with the new settings.
 
@@ -169,6 +171,7 @@ Settings live in `~/.config/find-fast/config.json`, which can also be edited by 
   "roots": ["~", "/media", "/mnt"],
   "exclude": ["node_modules", "__pycache__", "lost+found", "$RECYCLE.BIN", "System Volume Information"],
   "hidden": false,
+  "auto_mounts": true,
   "match_path": true
 }
 ```
@@ -176,6 +179,7 @@ Settings live in `~/.config/find-fast/config.json`, which can also be edited by 
 - `roots`: folders to index (`~` allowed); a root inside another one is ignored.
 - `exclude`: entries without `/` exclude by name (wildcards `*` `?` allowed); entries with `/` or starting with `~` exclude a whole folder by path.
 - `hidden`: also index names that start with a dot.
+- `auto_mounts`: also index every local data disk mounted now; `true` by default.
 - `match_path`: plain search words also match folder names in the path; `true` by default.
 - `keys`, `toggle_default_done`: the shortcuts, and whether the default show-or-hide shortcut was dealt with; written by Settings.
 
@@ -195,6 +199,7 @@ The tool reads folder listings only, never file contents, changes no file and do
 
 See [CHANGELOG.md](CHANGELOG.md).
 
+- 0.8.0: every local data disk is indexed by default (can be turned off in Settings), following disks as they are mounted and removed; the window no longer fades while unfocused unless turned on in the More menu.
 - 0.7.0: new layout: rows show the name over its folder with matches marked; a details panel at the right holds the full information and the actions, and the button row above the list and the locate button on every row are gone; type filters with counts over the whole result, folder suggestions for large results, and an order menu (column headers and the column order setting are removed); the status bar is the one place that counts, and a thin line under the search row shows a scan; three empty states, regular-expression errors explained in place, a ? panel for shortcuts and syntax, a grouped context menu; Settings in four parts; the folded window is 90 pixels high; the page switches between dark and light and never scrolls sideways.
 - 0.6.0: window: Enter or a shortcut right after typing acts on the new results; locate and copy keys also work in the search box; Esc in an empty box hides the window when a show-or-hide shortcut is set; settings problems stay above the buttons, the upgrade report scrolls and unsaved settings are asked about before an upgrade; a bad regular expression and a missing program to open a file are explained; the exclude question gives the number of entries; similar versions with the same time are ranked by draft word.
 - 0.5.1: an upgrade gives the new files permissions that follow the umask.

@@ -19,7 +19,7 @@ class CliTest(unittest.TestCase):
         make_tree(self.root)
         self.config = os.path.join(self.tmp, 'config.json')
         with open(self.config, 'w', encoding='utf-8') as f:
-            json.dump({'roots': [self.root]}, f)
+            json.dump({'roots': [self.root], 'auto_mounts': False}, f)
         self.cache = os.path.join(self.tmp, 'index.bin')
 
     def tearDown(self):

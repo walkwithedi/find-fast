@@ -49,7 +49,7 @@ function prepare() {
   const root = path.join(work, 'root');
   fs.mkdirSync(path.join(root, 'docs'), {recursive: true});
   fs.writeFileSync(path.join(root, 'docs', 'report.pdf'), 'x');
-  fs.writeFileSync(path.join(work, 'config.json'), JSON.stringify({roots: [root]}));
+  fs.writeFileSync(path.join(work, 'config.json'), JSON.stringify({roots: [root], auto_mounts: false}));
   return {work, dir, zip, bad, newVer: 'v' + newVer, oldVer: 'v' + oldVer};
 }
 
